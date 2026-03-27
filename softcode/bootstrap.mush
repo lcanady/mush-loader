@@ -16,11 +16,11 @@
 &MLOAD_PENDING [v(d.mload)]=
 &MLOAD_QUEUE [v(d.mload)]=
 
-# Lock to any wizard (hasflag check).
+# Lock to any wizard.  hasflag(%#,wizard) checks the ENACTOR, not the object.
 # /use gates $cmd execution (and USE, PAY, ^listen triggers).
-# Default lock gates @force and control.
-@lock [v(d.mload)]=haspower(me,Wizard)
-@lock/use [v(d.mload)]=haspower(me,Wizard)
+# Default lock gates @force and object control.
+@lock [v(d.mload)]=hasflag(%#,wizard)
+@lock/use [v(d.mload)]=hasflag(%#,wizard)
 
 # Grant the execscript power at ARCHITECT level so the object can call
 # execscript() with arguments.  This is required for in-game +mload commands.

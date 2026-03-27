@@ -269,12 +269,31 @@
 
 # ---------------------------------------------------------------------------
 # +mload (no args) — usage display (pulls from HELP_MLOAD)
+# u() evaluates the attribute so %r/%ch/%cn and [get(...)] expand correctly.
 # ---------------------------------------------------------------------------
 &CMD_MLOAD [v(d.mload)]=$+mload:
-  @pemit %#=[get(v(d.mload)/HELP_MLOAD)]
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    {
+      @pemit %#=[u(v(d.mload)/HELP_MLOAD)]
+    }
 
 # ---------------------------------------------------------------------------
-# +mload/help [<topic>] — explicit help dispatch
+# +mload/help — no-arg form: show overview
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_HELP_BARE [v(d.mload)]=$+mload/help:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    {
+      @pemit %#=[u(v(d.mload)/HELP_MLOAD)]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/help <topic> — per-switch help dispatch
 # ---------------------------------------------------------------------------
 &CMD_MLOAD_HELP [v(d.mload)]=$+mload/help *:
   @switch/first 1=
@@ -282,18 +301,18 @@
       @pemit %#=Permission denied.
     },
     [not(%0)], {
-      @pemit %#=[get(v(d.mload)/HELP_MLOAD)]
+      @pemit %#=[u(v(d.mload)/HELP_MLOAD)]
     },
     {
       @pemit %#=[switch(%0,
-        vet,      [get(v(d.mload)/HELP_MLOAD_VET)],
-        approve,  [get(v(d.mload)/HELP_MLOAD_APPROVE)],
-        reject,   [get(v(d.mload)/HELP_MLOAD_REJECT)],
-        registry, [get(v(d.mload)/HELP_MLOAD_REGISTRY)],
-        install,  [get(v(d.mload)/HELP_MLOAD_INSTALL)],
-        status,   [get(v(d.mload)/HELP_MLOAD_STATUS)],
-        log,      [get(v(d.mload)/HELP_MLOAD_LOG)],
-        No help found for '+mload/%0'. Try +mload/help for a list.
+        vet,      [u(v(d.mload)/HELP_MLOAD_VET)],
+        approve,  [u(v(d.mload)/HELP_MLOAD_APPROVE)],
+        reject,   [u(v(d.mload)/HELP_MLOAD_REJECT)],
+        registry, [u(v(d.mload)/HELP_MLOAD_REGISTRY)],
+        install,  [u(v(d.mload)/HELP_MLOAD_INSTALL)],
+        status,   [u(v(d.mload)/HELP_MLOAD_STATUS)],
+        log,      [u(v(d.mload)/HELP_MLOAD_LOG)],
+        No help found for '+mload/[escape(%0)]'. Try +mload/help for a list.
       )]
     }
 
@@ -378,8 +397,8 @@
   To install a listed package:%r
     +mload/install <name>@<version>%r
   %r
-  The registry is fetched live from:%r
-    [get(v(d.mload)/MLOAD_REGISTRY_URL)]%r
+  Registry URL is set in REGISTRY_URL in your loader.conf.%r
+  Default: https://raw.githubusercontent.com/lcanady/mush-registry/main/index.json%r
   %r
   See also: +mload/install
 

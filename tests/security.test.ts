@@ -125,6 +125,59 @@ runner.describe('mush-loader security', ({ it, beforeAll }) => {
     }
   });
 
+  // --- Lock: key must test the ENACTOR, not the object (M1) ---
+
+  it('default lock key tests enactor wizard flag, not object powers', async ({ expect }) => {
+    // lock() returns the lock key expression; must reference %# not me
+    const key = await expect(`lock(${loader})`);
+    if (key.includes('haspower(me') || key.includes('hasflag(me')) {
+      throw new Error(`Lock key tests the object, not the enactor: ${key}`);
+    }
+  });
+
+  it('use lock key tests enactor wizard flag, not object powers', async ({ expect }) => {
+    const key = await expect(`ulock(${loader})`);
+    if (key.includes('haspower(me') || key.includes('hasflag(me')) {
+      throw new Error(`UseLock key tests the object, not the enactor: ${key}`);
+    }
+  });
+
+  it('non-wizard cannot trigger +mload commands (use lock denies at lock level)', async ({ client, world }) => {
+    const mortal = await world.create('LockTestMortal');
+    // elock() tests whether mortal passes the use lock — should return 0
+    const passes = await client.eval(`elock(${loader}/use,${mortal})`);
+    if (passes !== '0') {
+      throw new Error(`UseLock passed for non-wizard ${mortal} — lock key is wrong`);
+    }
+  });
+
+  // --- L1: CMD_MLOAD (no-args) must deny non-wizards ---
+
+  it('+mload with no args denies non-wizard (CMD_MLOAD wizard guard)', async ({ client, world }) => {
+    const mortal = await world.create('NoArgMortal');
+    // @fo the mortal to type +mload — should get permission denied, not help text
+    const lines = await client.command(`@fo ${mortal}=+mload`);
+    const output = lines.join(' ');
+    if (output.toLowerCase().includes('mload') && !output.toLowerCase().includes('permission')) {
+      throw new Error(`CMD_MLOAD showed help to non-wizard: ${output}`);
+    }
+  });
+
+  // --- L2: +mload/help error message must escape %0 ---
+
+  it('+mload/help with evaluable topic does not execute injected code', async ({ client }) => {
+    // If %0 is not escaped, [pemit(%#,INJECTED)] would execute
+    const lines = await client.command('+mload/help [pemit(%#,INJECTED)]');
+    const output = lines.join(' ');
+    if (output.includes('INJECTED') && !output.includes('[pemit')) {
+      throw new Error('Injected mushcode in +mload/help topic was evaluated');
+    }
+    // The literal brackets must appear in the output (escaped), not be executed
+    if (!output.includes('[')) {
+      throw new Error(`Expected literal brackets in output, got: ${output}`);
+    }
+  });
+
   // --- Lock: object is wizard-only ---
 
   it('MushLoader <sys> has wizard use lock', async ({ expect }) => {
