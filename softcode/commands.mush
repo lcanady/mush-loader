@@ -268,22 +268,34 @@
     }
 
 # ---------------------------------------------------------------------------
-# +mload (no args) — usage display
+# +mload (no args) — usage display (pulls from HELP_MLOAD)
 # ---------------------------------------------------------------------------
 &CMD_MLOAD [v(d.mload)]=$+mload:
-  @pemit %#=
-    %ch%cy+mload%cn — MushLoader v[get(v(d.mload)/MLOAD_VERSION)]%r
-    %r
-    %ch+mload <file>%cn              Load a local .mush file (static validation)%r
-    %ch+mload/vet <file>%cn          Load with AI vetting (queues for approval)%r
-    %ch+mload/approve%cn             Approve and run a pending vetted load%r
-    %ch+mload/reject%cn              Reject and discard a pending vetted load%r
-    %ch+mload/registry%cn            List registry packages%r
-    %ch+mload/install <pkg>%cn       Fetch from registry and install%r
-    %ch+mload/status%cn              Show last operation status%r
-    %ch+mload/log%cn                 Show load history%r
-    %r
-    Wizard-only. Config: [get(v(d.mload)/MLOAD_INSTALL_PATH)]/config/loader.conf
+  @pemit %#=[get(v(d.mload)/HELP_MLOAD)]
+
+# ---------------------------------------------------------------------------
+# +mload/help [<topic>] — explicit help dispatch
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_HELP [v(d.mload)]=$+mload/help *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=[get(v(d.mload)/HELP_MLOAD)]
+    },
+    {
+      @pemit %#=[switch(%0,
+        vet,      [get(v(d.mload)/HELP_MLOAD_VET)],
+        approve,  [get(v(d.mload)/HELP_MLOAD_APPROVE)],
+        reject,   [get(v(d.mload)/HELP_MLOAD_REJECT)],
+        registry, [get(v(d.mload)/HELP_MLOAD_REGISTRY)],
+        install,  [get(v(d.mload)/HELP_MLOAD_INSTALL)],
+        status,   [get(v(d.mload)/HELP_MLOAD_STATUS)],
+        log,      [get(v(d.mload)/HELP_MLOAD_LOG)],
+        No help found for '+mload/%0'. Try +mload/help for a list.
+      )]
+    }
 
 # ---------------------------------------------------------------------------
 # TR_LOG — internal trigger: log an operation
@@ -291,6 +303,115 @@
 # ---------------------------------------------------------------------------
 &TR_LOG [v(d.mload)]=
   @trigger [v(d.mload)]/FN_LOG=%0
+
+# ---------------------------------------------------------------------------
+# In-game help text  (wizhelp +mload, wizhelp +mload/<switch>)
+# ---------------------------------------------------------------------------
+
+&HELP_MLOAD [v(d.mload)]=
+  %ch%cy+MLOAD%cn                                              Wizard only%r
+  %r
+  Manages loading of softcode onto this game via the mush-loader system.%r
+  All commands require the WIZARD flag.  Files are validated before loading;%r
+  use +mload/vet to also run AI analysis before anything is installed.%r
+  %r
+  %chSwitches:%cn%r
+    %ch/vet <file>%cn        Vet file with AI, queue result for approval.%r
+    %ch/approve%cn           Install the pending vetted file.%r
+    %ch/reject%cn            Discard the pending vetted file.%r
+    %ch/registry%cn          List packages available in the mush-loader registry.%r
+    %ch/install <pkg>%cn     Download and install a registry package.%r
+    %ch/status%cn            Show the most recent logged operation.%r
+    %ch/log%cn               Show full load history.%r
+  %r
+  %chExamples:%cn%r
+    +mload /opt/mush-loader/packages/bboard.mush%r
+    +mload/vet /opt/mush-loader/packages/bboard.mush%r
+    +mload/approve%r
+    +mload/install bboard@1.0.0%r
+  %r
+  See also: +mload/vet, +mload/registry, wizhelp POWER EXECSCRIPT
+
+&HELP_MLOAD_VET [v(d.mload)]=
+  %ch%cy+MLOAD/VET <file>%cn                                   Wizard only%r
+  %r
+  Submits <file> to AI vetting before installation.  The file is read,%r
+  statically validated, then passed to the configured AI provider for%r
+  security analysis.  The result is displayed and the load is queued.%r
+  %r
+  Only one load may be pending at a time.  Resolve it with +mload/approve%r
+  or +mload/reject before vetting another file.%r
+  %r
+  <file> must be an absolute path to a .mush file on the game server.%r
+  Allowed characters: a-z A-Z 0-9 / . - _ @  (no shell metacharacters).%r
+  %r
+  %chExamples:%cn%r
+    +mload/vet /opt/mush-loader/packages/bboard.mush%r
+    +mload/vet /home/mush/custom/mycommands.mush%r
+  %r
+  See also: +mload/approve, +mload/reject, +mload
+
+&HELP_MLOAD_APPROVE [v(d.mload)]=
+  %ch%cy+MLOAD/APPROVE%cn                                      Wizard only%r
+  %r
+  Installs the file currently queued by +mload/vet.  The file was already%r
+  vetted; this step executes the actual load.%r
+  %r
+  If no load is pending, you will be told so.%r
+  %r
+  See also: +mload/vet, +mload/reject
+
+&HELP_MLOAD_REJECT [v(d.mload)]=
+  %ch%cy+MLOAD/REJECT%cn                                       Wizard only%r
+  %r
+  Clears the file currently queued by +mload/vet without installing it.%r
+  Use this if the vet result shows issues you do not want to install.%r
+  %r
+  See also: +mload/vet, +mload/approve
+
+&HELP_MLOAD_REGISTRY [v(d.mload)]=
+  %ch%cy+MLOAD/REGISTRY%cn                                     Wizard only%r
+  %r
+  Lists packages available in the mush-loader community registry.%r
+  Each package shows its name, version, vet status, description, and tags.%r
+  %r
+  To install a listed package:%r
+    +mload/install <name>@<version>%r
+  %r
+  The registry is fetched live from:%r
+    [get(v(d.mload)/MLOAD_REGISTRY_URL)]%r
+  %r
+  See also: +mload/install
+
+&HELP_MLOAD_INSTALL [v(d.mload)]=
+  %ch%cy+MLOAD/INSTALL <pkg[@version]>%cn                      Wizard only%r
+  %r
+  Downloads <pkg> from the community registry, verifies its SHA-256%r
+  integrity hash, and installs it.  If a version is omitted, the latest%r
+  available version is used.%r
+  %r
+  <pkg> may only contain: a-z A-Z 0-9 @ . - _  (no path separators).%r
+  %r
+  %chExamples:%cn%r
+    +mload/install bboard%r
+    +mload/install bboard@1.0.0%r
+  %r
+  See also: +mload/registry
+
+&HELP_MLOAD_STATUS [v(d.mload)]=
+  %ch%cy+MLOAD/STATUS%cn                                       Wizard only%r
+  %r
+  Displays the most recent entry in the load history log.%r
+  %r
+  See also: +mload/log
+
+&HELP_MLOAD_LOG [v(d.mload)]=
+  %ch%cy+MLOAD/LOG%cn                                          Wizard only%r
+  %r
+  Displays the full load history: every load, vet, approval, rejection,%r
+  and registry install, with timestamps.%r
+  %r
+  See also: +mload/status
 
 @fo me=@pemit me=+mload command suite installed on [v(d.mload)].
 @fo me=@pemit me=Next step: &MLOAD_INSTALL_PATH [v(d.mload)]=</absolute/path/to/mush-loader>
