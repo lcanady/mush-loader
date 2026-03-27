@@ -17,10 +17,14 @@
 &MLOAD_QUEUE [v(d.mload)]=
 
 # Lock to any wizard (hasflag check).
-# The use lock gates $cmd execution; the enter/drop locks prevent
-# unintended interaction from non-wizards.
+# /use gates $cmd execution (and USE, PAY, ^listen triggers).
+# Default lock gates @force and control.
 @lock [v(d.mload)]=haspower(me,Wizard)
 @lock/use [v(d.mload)]=haspower(me,Wizard)
-@lock/interact [v(d.mload)]=haspower(me,Wizard)
+
+# Grant the execscript power at ARCHITECT level so the object can call
+# execscript() with arguments.  This is required for in-game +mload commands.
+# See: wizhelp POWER EXECSCRIPT
+@power [v(d.mload)]=@a execscript
 
 @fo me=@pemit me=MushLoader <sys> installed at [v(d.mload)].

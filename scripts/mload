@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# mush-loader execscript wrapper
+#
+# Copy (or symlink) this file into your RhostMUSH game's execscripthome
+# directory.  The in-game +mload commands invoke it via execscript().
+#
+# Configuration:
+#   Set MLOAD_PATH to wherever mush-loader is installed, either by
+#   exporting it in the game server's environment or by editing this file.
+#
+# Example (hardcoded):
+#   MLOAD_PATH=/opt/mush-loader
+#
+# Example (env-based, set before starting the game server):
+#   export MLOAD_PATH=/opt/mush-loader
+#
+# Usage (from execscript side):
+#   execscript(mload, load, /path/to/file.mush)
+#   execscript(mload, vet,  /path/to/file.mush)
+#   execscript(mload, install, bboard@1.0.0)
+#   execscript(mload, registry)
+#   execscript(mload, status)
+
+MLOAD_PATH="${MLOAD_PATH:-/opt/mush-loader}"
+
+if [[ ! -f "${MLOAD_PATH}/bin/mush-loader" ]]; then
+  echo "#-1 mush-loader not found at ${MLOAD_PATH}/bin/mush-loader"
+  exit 1
+fi
+
+# Source loader.conf if present so env vars (RHOST_*, AI_*) are available
+if [[ -f "${MLOAD_PATH}/config/loader.conf" ]]; then
+  # shellcheck source=/dev/null
+  source "${MLOAD_PATH}/config/loader.conf"
+fi
+
+exec node "${MLOAD_PATH}/bin/mush-loader" "$@"

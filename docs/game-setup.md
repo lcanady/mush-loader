@@ -76,19 +76,51 @@ This tells the in-game commands where to find the mush-loader CLI.
 
 ---
 
-## Step 5 — Enable execscript (for in-game commands)
+## Step 5 — Install the execscript wrapper
 
-In-game commands use `execscript()` to call the mush-loader CLI. This requires execscript to be enabled for your Wizard character in `rhostmush.conf`:
+In-game commands call the CLI via `execscript()`.  RhostMUSH's `execscript()` runs a **script file** from the game's `execscripthome` directory — it does not execute arbitrary binaries directly.
+
+### 5a — Configure execscripthome
+
+In `rhostmush.conf`, set the directory where execscript looks for scripts.  The game's `scripts/` subdirectory is the conventional choice:
 
 ```
-# rhostmush.conf
-execscript_allowed yes
-execscript_wiz_only yes
+execscripthome /opt/rhost/Server/game/scripts
 ```
 
 Restart the game after changing `rhostmush.conf`.
 
-> **Note:** If you only want to use the CLI (not in-game commands), execscript is not required.
+### 5b — Install the mload wrapper
+
+Copy (or symlink) the `scripts/mload` wrapper from this repo into your game's execscripthome and make it executable:
+
+```bash
+cp /opt/mush-loader/scripts/mload /opt/rhost/Server/game/scripts/mload
+chmod +x /opt/rhost/Server/game/scripts/mload
+```
+
+Edit the wrapper (or export `MLOAD_PATH` in your game server's startup environment) so it knows where mush-loader lives:
+
+```bash
+# Option A — edit the wrapper directly
+sed -i 's|/opt/mush-loader|/your/actual/path|g' \
+  /opt/rhost/Server/game/scripts/mload
+
+# Option B — export before starting the game server
+export MLOAD_PATH=/opt/mush-loader
+```
+
+### 5c — Grant the execscript power
+
+The bootstrap already runs this, but if you need to do it manually:
+
+```
+@power search(name=MushLoader <sys>)=@a execscript
+```
+
+The `@a` (ARCHITECT) bitlevel is required to allow arguments to be passed to the script.  See `wizhelp POWER EXECSCRIPT` in-game.
+
+> **Note:** If you only want the CLI (not in-game commands), skip Steps 5a–5c.
 
 ---
 
@@ -107,8 +139,18 @@ You should see the status and registry listing.
 
 ## Permissions
 
-The `MushLoader <sys>` object is locked to its owner (your Wizard character). Only the owning Wizard can run `+mload` commands. To grant access to another Wizard:
+`MushLoader <sys>` carries two locks, both set during bootstrap:
+
+| Lock | Purpose |
+|------|---------|
+| Default (`@lock`) | Controls `@force` and object control |
+| UseLock (`@lock/use`) | Gates all `$+mload` command triggering |
+
+Both default to `haspower(me,Wizard)` — any wizard passes, non-wizards don't.
+
+To grant access to a specific additional wizard by dbref:
 
 ```
-@lock search(name=MushLoader <sys>)=#<dbref1>|#<dbref2>
+@lock search(name=MushLoader <sys>)=haspower(me,Wizard)|#<dbref>
+@lock/use search(name=MushLoader <sys>)=haspower(me,Wizard)|#<dbref>
 ```
