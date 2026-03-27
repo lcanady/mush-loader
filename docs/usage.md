@@ -42,6 +42,7 @@ All commands require Wizard level.
 | `+mload/install <pkg>` | Fetch a registry package and install it |
 | `+mload/status` | Show the last logged operation |
 | `+mload/log` | Show full load history |
+| `+mload/help [<topic>]` | In-game help; topic can be any switch name |
 
 ## .mush file format
 

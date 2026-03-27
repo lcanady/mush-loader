@@ -342,6 +342,7 @@
     %ch/install <pkg>%cn     Download and install a registry package.%r
     %ch/status%cn            Show the most recent logged operation.%r
     %ch/log%cn               Show full load history.%r
+    %ch/help [<topic>]%cn    Show this help, or help for a specific switch.%r
   %r
   %chExamples:%cn%r
     +mload /opt/mush-loader/packages/bboard.mush%r

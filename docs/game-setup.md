@@ -64,7 +64,7 @@ Bootstrap complete. The +mload command suite is now available in-game.
 
 ---
 
-## Step 4 — Set the install path on the game object
+## Step 4 — Mark setup as complete on the game object
 
 Connect to your game as Wizard and run:
 
@@ -72,7 +72,12 @@ Connect to your game as Wizard and run:
 &MLOAD_INSTALL_PATH search(name=MushLoader <sys>)=/opt/mush-loader
 ```
 
-This tells the in-game commands where to find the mush-loader CLI.
+This attribute tells the in-game commands that setup is complete. Commands
+check for its presence and show an error until it is set.
+
+> **Note:** The actual path used to locate mush-loader at runtime comes from
+> the `MLOAD_PATH` environment variable in the `scripts/mload` wrapper
+> (configured in Step 5b), not from this attribute.
 
 ---
 
@@ -146,11 +151,11 @@ You should see the status and registry listing.
 | Default (`@lock`) | Controls `@force` and object control |
 | UseLock (`@lock/use`) | Gates all `$+mload` command triggering |
 
-Both default to `haspower(me,Wizard)` — any wizard passes, non-wizards don't.
+Both default to `hasflag(%#,wizard)` — any wizard passes, non-wizards are denied at the lock level before any command code runs.
 
 To grant access to a specific additional wizard by dbref:
 
 ```
-@lock search(name=MushLoader <sys>)=haspower(me,Wizard)|#<dbref>
-@lock/use search(name=MushLoader <sys>)=haspower(me,Wizard)|#<dbref>
+@lock search(name=MushLoader <sys>)=hasflag(%#,wizard)|#<dbref>
+@lock/use search(name=MushLoader <sys>)=hasflag(%#,wizard)|#<dbref>
 ```

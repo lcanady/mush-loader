@@ -45,7 +45,9 @@ mush-loader install bboard@1.0.0         # fetch from registry + install
 +mload/reject          discard queued load
 +mload/registry        list registry packages
 +mload/install <pkg>   fetch + install from registry
-+mload/log             load history
++mload/status          last logged operation
++mload/log             full load history
++mload/help [<topic>]  in-game help
 ```
 
 ## AI vetting
