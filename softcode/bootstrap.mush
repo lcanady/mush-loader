@@ -1,0 +1,26 @@
+# mush-loader bootstrap object
+# Run this file once to create the loader object on your game.
+# After this, run commands.mush to install the +mload command suite.
+#
+# Requires: Wizard-level account, execscript enabled for owner.
+
+@create MushLoader <sys>
+@set MushLoader <sys>=inherit safe
+@fo me=&d.mload me=search(name=MushLoader <sys>)
+
+# Version marker
+&MLOAD_VERSION [v(d.mload)]=0.1.0
+
+# Persistent state attributes
+&MLOAD_LOG [v(d.mload)]=
+&MLOAD_PENDING [v(d.mload)]=
+&MLOAD_QUEUE [v(d.mload)]=
+
+# Lock to any wizard (hasflag check).
+# The use lock gates $cmd execution; the enter/drop locks prevent
+# unintended interaction from non-wizards.
+@lock [v(d.mload)]=haspower(me,Wizard)
+@lock/use [v(d.mload)]=haspower(me,Wizard)
+@lock/interact [v(d.mload)]=haspower(me,Wizard)
+
+@fo me=@pemit me=MushLoader <sys> installed at [v(d.mload)].

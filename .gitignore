@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# credentials — never commit these
+config/loader.conf
+*.conf
+.env
+.env.*
+
+# OS
+.DS_Store

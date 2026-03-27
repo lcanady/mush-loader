@@ -1,0 +1,51 @@
+# mush-loader configuration
+# Copy this file to loader.conf and fill in your values.
+# Source it before running the CLI: source loader.conf && mush-loader <cmd>
+# Or export variables directly in your shell.
+
+# ---------------------------------------------------------------------------
+# Game connection (required)
+# ---------------------------------------------------------------------------
+export RHOST_HOST=localhost
+export RHOST_PORT=4201
+export RHOST_USER=Wizard
+export RHOST_PASS=yourpasswordhere
+
+# ---------------------------------------------------------------------------
+# AI vetting (optional)
+# Remove or leave AI_PROVIDER blank to use static-only validation.
+# ---------------------------------------------------------------------------
+
+# Choose one: anthropic | openai | gemini | ollama | custom
+# export AI_PROVIDER=anthropic
+
+# Anthropic (Claude)
+# export AI_PROVIDER=anthropic
+# export AI_API_KEY=sk-ant-...
+# export AI_MODEL=claude-opus-4-6
+
+# OpenAI
+# export AI_PROVIDER=openai
+# export AI_API_KEY=sk-...
+# export AI_MODEL=gpt-4o
+
+# Google Gemini (via OpenAI-compat endpoint)
+# export AI_PROVIDER=gemini
+# export AI_API_KEY=AIza...
+# export AI_MODEL=gemini-2.5-flash
+
+# Ollama (local, no key needed)
+# export AI_PROVIDER=ollama
+# export AI_BASE_URL=http://localhost:11434
+# export AI_MODEL=llama3
+
+# Custom / roll-your-own (e.g. a local Claude Code skill server)
+# export AI_PROVIDER=custom
+# export AI_BASE_URL=http://localhost:8080/vet
+# export AI_API_KEY=optional-key
+# export AI_MODEL=optional-model-hint
+
+# ---------------------------------------------------------------------------
+# Registry (optional override)
+# ---------------------------------------------------------------------------
+# export REGISTRY_URL=https://raw.githubusercontent.com/lcanady/mush-registry/main/index.json

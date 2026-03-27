@@ -1,0 +1,291 @@
+# mush-loader in-game command suite
+# Requires bootstrap.mush to have been run first.
+# Requires execscript enabled and mush-loader installed on the host server.
+#
+# All commands are wizard-only via hasflag(%#,wizard) guards and
+# the use lock on MushLoader <sys>.
+
+@fo me=&d.mload me=search(name=MushLoader <sys>)
+
+# ---------------------------------------------------------------------------
+# Internal UDFs
+# ---------------------------------------------------------------------------
+
+# FN_WIZARD_CHECK: returns 1 if enactor is wizard, 0 otherwise
+# Used by all trigger targets to verify caller since @trigger bypasses use lock.
+&FN_WIZARD_CHECK [v(d.mload)]=
+  [hasflag(%0, wizard)]
+
+# FN_SAFE_PATH: sanitize a file path argument before passing to execscript.
+# Allows only: a-z A-Z 0-9 / . - _ @
+# Blocks: shell metacharacters AND any path containing .. (traversal)
+# Returns #-1 INVALID PATH if unsafe.
+# %0 = raw path argument
+&FN_SAFE_PATH [v(d.mload)]=
+  [if(
+    and(
+      regmatchi(%0, ^[a-zA-Z0-9/._@][a-zA-Z0-9/._@-]*$),
+      not(regmatchi(%0, \.\.))
+    ),
+    %0,
+    #-1 INVALID PATH
+  )]
+
+# FN_SAFE_PKG: sanitize a registry package name (no / or .. ever needed).
+# Allows only: a-z A-Z 0-9 @ . - _
+# Returns #-1 INVALID PACKAGE NAME if unsafe.
+# %0 = raw package argument (e.g. "bboard@1.0.0")
+&FN_SAFE_PKG [v(d.mload)]=
+  [if(
+    regmatchi(%0, ^[a-zA-Z0-9@._-]+$),
+    %0,
+    #-1 INVALID PACKAGE NAME
+  )]
+
+# FN_LOG: append a timestamped entry to MLOAD_LOG
+# Log entries are escape()'d before storage to prevent re-evaluation on display.
+# %0 = message
+&FN_LOG [v(d.mload)]=
+  [setq(0, strcat(convsecs(secs()), %b, escape(%0)))]
+  [set(v(d.mload), MLOAD_LOG:
+    [if(get(v(d.mload)/MLOAD_LOG),
+      trim(strcat(get(v(d.mload)/MLOAD_LOG), |, %q0)),
+      %q0
+    )]
+  )]
+
+# FN_EXEC: run mush-loader CLI via execscript.
+# %0 = subcommand (e.g. "load"), %1 = pre-validated safe path argument
+# The subcommand is hardcoded by each caller — only the path is user-supplied,
+# and it must already be validated through FN_SAFE_PATH before reaching here.
+&FN_EXEC [v(d.mload)]=
+  [execscript(node, [get(v(d.mload)/MLOAD_INSTALL_PATH)]/bin/mush-loader, %0 %1)]
+
+# ---------------------------------------------------------------------------
+# +mload — base command (no switch): show usage
+# NOTE: This MUST be the LAST $+mload pattern defined so the wildcard does not
+# shadow the switch-specific patterns above it.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# +mload/vet <file> — vet first, queue for approval
+# DEFINED FIRST so it is scanned before the $+mload * wildcard.
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_VET [v(d.mload)]=$+mload/vet *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +mload/vet <file.mush>
+    },
+    [get(v(d.mload)/MLOAD_PENDING)], {
+      @pemit %#=A load is already pending approval. Use +mload/approve or +mload/reject first.
+    },
+    {
+      @pemit %#=%ch%cyVetting%cn [escape(%0)]... (this may take a moment);
+      @trigger [v(d.mload)]/TR_EXEC_VET=%0,%#
+    }
+
+&TR_EXEC_VET [v(d.mload)]=
+  @switch/first 1=
+    [not(u(v(d.mload)/FN_WIZARD_CHECK, %#))], {
+      @pemit %1=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_INSTALL_PATH))], {
+      @pemit %1=Error: MLOAD_INSTALL_PATH not set.
+    },
+    {
+      [setq(9, u(v(d.mload)/FN_SAFE_PATH, %0))]
+      [if(
+        isdbref(%q9),
+        @pemit %1=Invalid path: [escape(%0)]. Only alphanumerics and / . - _ @ are allowed.,
+        [setq(0, u(v(d.mload)/FN_EXEC, vet, %q9))]
+        @set [v(d.mload)]=MLOAD_PENDING:1;
+        @set [v(d.mload)]=MLOAD_QUEUE:%q9;
+        @pemit %1=Vet result for [escape(%q9)]:%r[escape(%q0)]%r%rUse +mload/approve to install or +mload/reject to cancel.;
+        @trigger [v(d.mload)]/TR_LOG=Vetted [escape(%q9)] by [name(%1)]
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/approve — approve and run a pending vetted load
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_APPROVE [v(d.mload)]=$+mload/approve:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_QUEUE))], {
+      @pemit %#=Nothing pending. Use +mload/vet <file> first.
+    },
+    {
+      @pemit %#=%ch%cyInstalling%cn [escape(get(v(d.mload)/MLOAD_QUEUE))]...;
+      @trigger [v(d.mload)]/TR_EXEC_LOAD=[get(v(d.mload)/MLOAD_QUEUE)],%#;
+      &MLOAD_PENDING [v(d.mload)]=;
+      &MLOAD_QUEUE [v(d.mload)]=
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/reject — reject and clear a pending vetted load
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_REJECT [v(d.mload)]=$+mload/reject:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_QUEUE))], {
+      @pemit %#=Nothing pending.
+    },
+    {
+      @pemit %#=Load of [escape(get(v(d.mload)/MLOAD_QUEUE))] rejected and cleared.;
+      @trigger [v(d.mload)]/TR_LOG=Rejected [escape(get(v(d.mload)/MLOAD_QUEUE))] by [name(%#)];
+      &MLOAD_PENDING [v(d.mload)]=;
+      &MLOAD_QUEUE [v(d.mload)]=
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/registry — list available registry packages
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_REGISTRY [v(d.mload)]=$+mload/registry:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_INSTALL_PATH))], {
+      @pemit %#=Error: MLOAD_INSTALL_PATH not set.
+    },
+    {
+      @pemit %#=%ch%cyRegistry packages:%cn;
+      @pemit %#=[escape(u(v(d.mload)/FN_EXEC, registry, ))]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/install <pkg> — fetch from registry and install
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_INSTALL [v(d.mload)]=$+mload/install *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +mload/install <pkg[@version]>
+    },
+    [not(get(v(d.mload)/MLOAD_INSTALL_PATH))], {
+      @pemit %#=Error: MLOAD_INSTALL_PATH not set.
+    },
+    {
+      @pemit %#=%ch%cyInstalling%cn [escape(%0)] from registry...;
+      @trigger [v(d.mload)]/TR_EXEC_INSTALL=%0,%#
+    }
+
+&TR_EXEC_INSTALL [v(d.mload)]=
+  @switch/first 1=
+    [not(u(v(d.mload)/FN_WIZARD_CHECK, %#))], {
+      @pemit %1=Permission denied.
+    },
+    {
+      [setq(9, u(v(d.mload)/FN_SAFE_PKG, %0))]
+      [if(
+        isdbref(%q9),
+        @pemit %1=Invalid package name: [escape(%0)]. Only alphanumerics and @ . - _ are allowed.,
+        [setq(0, u(v(d.mload)/FN_EXEC, install, %q9))]
+        @pemit %1=[escape(%q0)];
+        @trigger [v(d.mload)]/TR_LOG=Registry install [escape(%q9)] by [name(%1)]
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/status — show last operation status
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_STATUS [v(d.mload)]=$+mload/status:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_LOG))], {
+      @pemit %#=No operations logged yet.
+    },
+    {
+      @pemit %#=Last operation: [last(iter(get(v(d.mload)/MLOAD_LOG), %i0, |))]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload/log — show full load history
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_LOG [v(d.mload)]=$+mload/log:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_LOG))], {
+      @pemit %#=No operations logged yet.
+    },
+    {
+      @pemit %#=%ch%cymush-loader history:%cn;
+      @pemit %#=[iter(get(v(d.mload)/MLOAD_LOG), %i0, |, %r)]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload <file> — load without vetting
+# DEFINED LAST — wildcard pattern; switch patterns above take priority.
+# ---------------------------------------------------------------------------
+&CMD_MLOAD_FILE [v(d.mload)]=$+mload *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +mload <file.mush>
+    },
+    {
+      @pemit %#=%ch%cyLoading%cn [escape(%0)]...;
+      &MLOAD_PENDING [v(d.mload)]=;
+      @trigger [v(d.mload)]/TR_EXEC_LOAD=%0,%#
+    }
+
+&TR_EXEC_LOAD [v(d.mload)]=
+  @switch/first 1=
+    [not(u(v(d.mload)/FN_WIZARD_CHECK, %#))], {
+      @pemit %1=Permission denied.
+    },
+    [not(get(v(d.mload)/MLOAD_INSTALL_PATH))], {
+      @pemit %1=Error: MLOAD_INSTALL_PATH not set on [v(d.mload)]. Run: &MLOAD_INSTALL_PATH [v(d.mload)]=</path/to/mush-loader>
+    },
+    {
+      [setq(9, u(v(d.mload)/FN_SAFE_PATH, %0))]
+      [if(
+        isdbref(%q9),
+        @pemit %1=Invalid path: [escape(%0)]. Only alphanumerics and / . - _ @ are allowed.,
+        @pemit %1=[escape(u(v(d.mload)/FN_EXEC, load, %q9))];
+        @trigger [v(d.mload)]/TR_LOG=Loaded [escape(%q9)] by [name(%1)]
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# +mload (no args) — usage display
+# ---------------------------------------------------------------------------
+&CMD_MLOAD [v(d.mload)]=$+mload:
+  @pemit %#=
+    %ch%cy+mload%cn — MushLoader v[get(v(d.mload)/MLOAD_VERSION)]%r
+    %r
+    %ch+mload <file>%cn              Load a local .mush file (static validation)%r
+    %ch+mload/vet <file>%cn          Load with AI vetting (queues for approval)%r
+    %ch+mload/approve%cn             Approve and run a pending vetted load%r
+    %ch+mload/reject%cn              Reject and discard a pending vetted load%r
+    %ch+mload/registry%cn            List registry packages%r
+    %ch+mload/install <pkg>%cn       Fetch from registry and install%r
+    %ch+mload/status%cn              Show last operation status%r
+    %ch+mload/log%cn                 Show load history%r
+    %r
+    Wizard-only. Config: [get(v(d.mload)/MLOAD_INSTALL_PATH)]/config/loader.conf
+
+# ---------------------------------------------------------------------------
+# TR_LOG — internal trigger: log an operation
+# %0 = message (should already be escape()'d by caller)
+# ---------------------------------------------------------------------------
+&TR_LOG [v(d.mload)]=
+  @trigger [v(d.mload)]/FN_LOG=%0
+
+@fo me=@pemit me=+mload command suite installed on [v(d.mload)].
+@fo me=@pemit me=Next step: &MLOAD_INSTALL_PATH [v(d.mload)]=</absolute/path/to/mush-loader>
