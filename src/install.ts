@@ -10,14 +10,79 @@ import { RhostClient } from '@rhost/testkit';
 import { LoaderConfig, InstallResult, ParsedMushFile } from './types';
 import { withClient } from './client';
 import { parseMushFile } from './parse';
+import { apiAvailable, apiExec } from './api';
 
 export async function installCode(
   code: string,
   config: LoaderConfig
 ): Promise<InstallResult> {
+  const parsed = parseMushFile(code);
+  if (apiAvailable(config)) {
+    return installParsedWithApi(parsed, config);
+  }
   return withClient(config, async (client) => {
-    return installParsed(parseMushFile(code), client);
+    return installParsed(parsed, client);
   });
+}
+
+/**
+ * Install via the RhostMUSH HTTP API port.
+ * Runs pre-install → main → post-install in order, aborting on first failure.
+ * Note: HTTP 200 confirms the command was queued; MUSH-level errors (bad syntax,
+ * permission denied in softcode) are not visible in the response.
+ */
+async function installParsedWithApi(
+  parsed: ParsedMushFile,
+  config: LoaderConfig
+): Promise<InstallResult> {
+  const sections: Array<{ label: string; code: string }> = [
+    { label: 'pre-install',  code: parsed.preInstall },
+    { label: 'main',         code: parsed.main },
+    { label: 'post-install', code: parsed.postInstall },
+  ];
+
+  const log: string[] = [];
+  const errors: string[] = [];
+
+  for (const { label, code } of sections) {
+    if (!code.trim()) continue;
+    log.push(`--- ${label} ---`);
+    const result = await installSectionWithApi(code, config);
+    log.push(...result.log);
+    errors.push(...result.errors.map(e => `[${label}] ${e}`));
+    if (errors.length > 0) {
+      log.push(`--- ${label} failed, aborting remaining sections ---`);
+      break;
+    }
+  }
+
+  return { success: errors.length === 0, errors, log };
+}
+
+async function installSectionWithApi(
+  code: string,
+  config: LoaderConfig
+): Promise<InstallResult> {
+  const lines = code
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && !l.startsWith('#'));
+
+  const log: string[] = [];
+  const errors: string[] = [];
+
+  for (const line of lines) {
+    try {
+      await apiExec(line, config);
+      log.push(`> ${line}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Failed to execute: ${line} — ${msg}`);
+      log.push(`! ${line} — ${msg}`);
+    }
+  }
+
+  return { success: errors.length === 0, errors, log };
 }
 
 /**

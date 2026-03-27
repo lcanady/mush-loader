@@ -46,6 +46,17 @@ export RHOST_PASS=yourpasswordhere
 # export AI_MODEL=optional-model-hint
 
 # ---------------------------------------------------------------------------
+# RhostMUSH HTTP API port (optional — replaces telnet when all three are set)
+# ---------------------------------------------------------------------------
+# Faster and more reliable than telnet when the game is accessible by HTTP.
+# Requires api_port set in rhostmush.conf and an @api/enable'd object.
+# See docs/game-setup.md Step 6 for setup instructions.
+#
+# export API_PORT=2222          # must match api_port in rhostmush.conf
+# export API_DBREF=#123         # dbref of the @api/enable'd loader object
+# export API_PASSWORD=secret    # password set with @api/password <dbref>=<pass>
+
+# ---------------------------------------------------------------------------
 # Registry (optional override)
 # ---------------------------------------------------------------------------
 # export REGISTRY_URL=https://raw.githubusercontent.com/lcanady/mush-registry/main/index.json

@@ -129,7 +129,62 @@ The `@a` (ARCHITECT) bitlevel is required to allow arguments to be passed to the
 
 ---
 
-## Step 6 — Test in-game
+## Step 6 — (Optional) Enable the HTTP API port
+
+The RhostMUSH API port lets mush-loader send commands over HTTP instead of
+opening a telnet connection.  It's faster, requires no login/logout cycle,
+and works cleanly when mush-loader runs on a separate machine.
+
+### 6a — Enable the API port in rhostmush.conf
+
+```
+api_port 2222       # any free port; must not match your telnet port
+```
+
+Restart the game after changing `rhostmush.conf`.
+
+### 6b — Enable the MushLoader object for API access
+
+Connect as Wizard and run the following, substituting the real dbref of
+your `MushLoader <sys>` object (use `search(name=MushLoader <sys>)` to find it):
+
+```
+@api/enable #<dbref>
+@api/password #<dbref>=<choose-a-strong-password>
+```
+
+If mush-loader runs on a machine other than the game server, also allow
+its IP address (defaults to localhost only):
+
+```
+@api/ip #<dbref>=<your.server.ip.address>
+```
+
+Verify everything is ready:
+
+```
+@api/status #<dbref>
+```
+
+### 6c — Add API credentials to loader.conf
+
+```bash
+export API_PORT=2222
+export API_DBREF=#<dbref>
+export API_PASSWORD=<the-password-you-set>
+```
+
+When all three are set, mush-loader automatically uses the API port for all
+installs.  Leave them unset to keep using the telnet path.
+
+> **Note:** POST responses confirm the command was _queued_.  MUSH-level
+> errors (bad syntax, insufficient permissions in softcode) are not visible
+> in the HTTP response.  The telnet path catches those via output scanning;
+> the API path does not.
+
+---
+
+## Step 7 — Test in-game
 
 Log into your game as Wizard:
 

@@ -1,11 +1,17 @@
 /** Shared types for mush-loader */
 
 export interface LoaderConfig {
-  // Game connection (via @rhost/testkit)
+  // Game connection (via @rhost/testkit telnet)
   host: string;
   port: number;
   username: string;
   password: string;
+
+  // RhostMUSH HTTP API port (optional — used instead of telnet when all three set)
+  // Configure with api_port in rhostmush.conf; enable object with @api/enable + @api/password
+  apiPort?: number;
+  apiDbref?: string;    // e.g. '#123' — the dbref authenticated via the API
+  apiPassword?: string; // password set with @api/password <dbref>=<pass>
 
   // AI vetting (optional)
   aiProvider?: 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom';

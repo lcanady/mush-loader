@@ -23,11 +23,23 @@ export function loadConfig(): LoaderConfig {
     throw new Error(`Unknown AI_PROVIDER: ${aiProvider}. Valid: anthropic, openai, gemini, ollama, custom`);
   }
 
+  const rawApiPort = process.env.API_PORT;
+  let apiPort: number | undefined;
+  if (rawApiPort) {
+    apiPort = parseInt(rawApiPort, 10);
+    if (isNaN(apiPort) || apiPort < 1 || apiPort > 65535) {
+      throw new Error(`API_PORT must be a number between 1 and 65535, got: ${rawApiPort}`);
+    }
+  }
+
   return {
     host,
     port,
     username,
     password,
+    apiPort,
+    apiDbref: process.env.API_DBREF,
+    apiPassword: process.env.API_PASSWORD,
     aiProvider,
     aiApiKey: process.env.AI_API_KEY,
     aiModel: process.env.AI_MODEL,
