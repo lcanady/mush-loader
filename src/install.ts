@@ -10,7 +10,7 @@ import { RhostClient } from '@rhost/testkit';
 import { LoaderConfig, InstallResult, ParsedMushFile } from './types';
 import { withClient } from './client';
 import { parseMushFile } from './parse';
-import { apiAvailable, apiExec } from './api';
+import { apiAvailable, apiExec, apiGet, translateCommand } from './api';
 
 export async function installCode(
   code: string,
@@ -70,19 +70,43 @@ async function installSectionWithApi(
 
   const log: string[] = [];
   const errors: string[] = [];
+  let lastDbref: string | undefined;
 
   for (const line of lines) {
-    try {
-      await apiExec(line, config);
-      log.push(`> ${line}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Failed to execute: ${line} — ${msg}`);
-      log.push(`! ${line} — ${msg}`);
+    const translation = translateCommand(line);
+
+    if (translation) {
+      // GET path: execute via function equivalent, check Return: for errors.
+      try {
+        const result = await apiGet(translation.expr, config);
+        const errMsg = translation.errorFromResult(result);
+        if (errMsg) {
+          errors.push(`Command returned error: ${line} — ${errMsg}`);
+          log.push(`! ${line} — ${errMsg}`);
+        } else {
+          log.push(`> ${line}`);
+          const dbref = translation.dbrefFromResult?.(result);
+          if (dbref) lastDbref = dbref;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`Failed to execute: ${line} — ${msg}`);
+        log.push(`! ${line} — ${msg}`);
+      }
+    } else {
+      // POST path: fire-and-forget — HTTP errors are caught, MUSH errors are not.
+      try {
+        await apiExec(line, config);
+        log.push(`> ${line}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`Failed to execute: ${line} — ${msg}`);
+        log.push(`! ${line} — ${msg}`);
+      }
     }
   }
 
-  return { success: errors.length === 0, errors, log };
+  return { success: errors.length === 0, object: lastDbref, errors, log };
 }
 
 /**

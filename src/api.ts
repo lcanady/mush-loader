@@ -5,16 +5,18 @@
  * external programs execute mushcode and read values without a telnet session.
  *
  * Protocol (headers-only — no request or response body):
- *   POST + Exec64: <base64(cmd)>   → execute one command; 200 = queued
+ *   POST + Exec64: <base64(cmd)>   → execute one command; 200 = queued only
  *   GET  + Exec64: <base64(expr)>  → evaluate expression; result in Return: header
  *
- * Authentication: HTTP Basic — user = "#<dbref>", password = API password.
- * We always use Exec64: (base64) so mushcode with special characters passes safely.
+ * Error detection strategy:
+ *   POST is fire-and-forget — HTTP 200 means the command was queued, NOT that
+ *   it succeeded at the MUSH level.  To detect MUSH errors (permission denied,
+ *   object not found, etc.) use GET with a function equivalent via translateCommand().
+ *   Commands with no function equivalent (think, @power, @pemit, …) use POST and
+ *   their MUSH-level errors are undetectable.
  *
- * Limitation: POST responses confirm queueing only.  MUSH-level errors
- * (bad syntax, permission denied in softcode) are not visible in the HTTP
- * response — only HTTP-level failures (4xx) are catchable here.
- * Use apiGet() with a verification expression if you need MUSH-level confirmation.
+ * Authentication: HTTP Basic — user = "#<dbref>", password = API password.
+ * Always use Exec64: (base64) so mushcode with special characters passes safely.
  *
  * Config requirements (all three must be set for apiAvailable() to return true):
  *   API_PORT     — port matching api_port in rhostmush.conf
@@ -22,6 +24,84 @@
  *   API_PASSWORD — password set with @api/password <dbref>=<pass>
  */
 import { LoaderConfig } from './types';
+
+// ---------------------------------------------------------------------------
+// Command → GET translation
+// ---------------------------------------------------------------------------
+
+export interface CommandTranslation {
+  /** GET expression that executes the side effect and returns a checkable value. */
+  expr: string;
+  /**
+   * Returns a non-empty error string when the GET result indicates failure,
+   * or null/undefined when the command succeeded.
+   */
+  errorFromResult(result: string): string | null;
+  /** Extract a dbref from a success result, if applicable. */
+  dbrefFromResult?(result: string): string | undefined;
+}
+
+/**
+ * Try to translate a single .mush command line into a GET-evaluable expression
+ * whose Return: value indicates success or failure.
+ *
+ * Returns null when no translation exists — the caller should fall back to
+ * apiExec (POST), accepting that MUSH-level errors will be invisible.
+ *
+ * Translations implemented:
+ *   @create Name [<tag>]  →  [create(Name <tag>)]       returns #dbref or #-N
+ *   @set    obj=flag      →  [set(obj,flag)]             returns 1 or #-N
+ *   @lock[/type] obj=key  →  [lock(obj,key[,type])]      returns 1 or #-N
+ *
+ * Not translated (POST-only):
+ *   &ATTR obj=val    — no standard set-attribute function in MUSH
+ *   @power obj=pwr   — no function equivalent
+ *   @parent obj=p    — parent() return semantics vary across servers
+ *   think / @pemit / @emit / @fo / @trigger / …
+ */
+export function translateCommand(line: string): CommandTranslation | null {
+  // @create Name [<tag>]  — returns #dbref on success, #-N on failure
+  const createM = line.match(/^@create\s+(.+)$/i);
+  if (createM) {
+    const args = createM[1].trim();
+    return {
+      expr: `[create(${args})]`,
+      errorFromResult(r) {
+        return r.startsWith('#-') ? `create(${args}) returned ${r}` : null;
+      },
+      dbrefFromResult(r) {
+        return /^#\d+$/.test(r) ? r : undefined;
+      },
+    };
+  }
+
+  // @set obj=flag  — returns 1 on success, #-N on failure
+  const setM = line.match(/^@set\s+(.+?)\s*=\s*(.+)$/i);
+  if (setM) {
+    const [, obj, flag] = setM;
+    return {
+      expr: `[set(${obj.trim()},${flag.trim()})]`,
+      errorFromResult(r) {
+        return r !== '1' && r !== '' ? `set(${obj.trim()},${flag.trim()}) returned ${r}` : null;
+      },
+    };
+  }
+
+  // @lock[/type] obj=key  — returns 1 on success, #-N on failure
+  const lockM = line.match(/^@lock(?:\/(\w+))?\s+(.+?)\s*=\s*(.*)$/i);
+  if (lockM) {
+    const [, lockType, obj, key] = lockM;
+    const typeArg = lockType ? `,${lockType}` : '';
+    return {
+      expr: `[lock(${obj.trim()},${key.trim()}${typeArg})]`,
+      errorFromResult(r) {
+        return r !== '1' && r !== '' ? `lock(${obj.trim()},${key.trim()}${typeArg}) returned ${r}` : null;
+      },
+    };
+  }
+
+  return null;
+}
 
 function apiBaseUrl(config: LoaderConfig): string {
   return `http://${config.host}:${config.apiPort}`;

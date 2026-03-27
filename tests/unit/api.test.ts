@@ -1,6 +1,6 @@
 import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { apiAvailable, apiExec, apiGet } from '../../src/api';
+import { apiAvailable, apiExec, apiGet, translateCommand } from '../../src/api';
 import type { LoaderConfig } from '../../src/types';
 
 // ---------------------------------------------------------------------------
@@ -193,5 +193,90 @@ describe('apiGet', () => {
     const { captured } = stubFetch(() => new Response(null, { status: 200 }));
     await apiGet('[lnum(1)]', apiCfg({ host: '10.0.0.1', apiPort: 9999 }));
     assert.equal(captured()!.url, 'http://10.0.0.1:9999');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// translateCommand — error-detectable GET translations
+// ---------------------------------------------------------------------------
+
+describe('translateCommand', () => {
+  // --- @create ---
+  test('@create returns a translation with create() expr', () => {
+    const t = translateCommand('@create MySystem <sys>');
+    assert.ok(t, 'should translate @create');
+    assert.ok(t!.expr.includes('create(MySystem <sys>)'));
+  });
+
+  test('@create: no error on valid dbref result', () => {
+    const t = translateCommand('@create Foo')!;
+    assert.equal(t.errorFromResult('#123'), null);
+  });
+
+  test('@create: error on #-1 result', () => {
+    const t = translateCommand('@create Foo')!;
+    assert.ok(t.errorFromResult('#-1 QUOTA'));
+  });
+
+  test('@create: extracts dbref from success result', () => {
+    const t = translateCommand('@create Foo')!;
+    assert.equal(t.dbrefFromResult?.('#42'), '#42');
+    assert.equal(t.dbrefFromResult?.('#-1'), undefined);
+  });
+
+  // --- @set ---
+  test('@set returns a translation with set() expr', () => {
+    const t = translateCommand('@set MySystem <sys>=inherit safe');
+    assert.ok(t, 'should translate @set');
+    assert.ok(t!.expr.includes('set('));
+  });
+
+  test('@set: no error on "1" result', () => {
+    const t = translateCommand('@set #123=safe')!;
+    assert.equal(t.errorFromResult('1'), null);
+  });
+
+  test('@set: error on #-1 result', () => {
+    const t = translateCommand('@set #123=safe')!;
+    assert.ok(t.errorFromResult('#-1 NOPERM'));
+  });
+
+  // --- @lock ---
+  test('@lock returns a translation with lock() expr', () => {
+    const t = translateCommand('@lock MySystem <sys>=hasflag(%#,wizard)');
+    assert.ok(t, 'should translate @lock');
+    assert.ok(t!.expr.includes('lock('));
+  });
+
+  test('@lock/use includes lock type in expr', () => {
+    const t = translateCommand('@lock/use MySystem <sys>=hasflag(%#,wizard)');
+    assert.ok(t!.expr.includes('use'));
+  });
+
+  test('@lock: no error on "1" result', () => {
+    const t = translateCommand('@lock #123=hasflag(%#,wizard)')!;
+    assert.equal(t.errorFromResult('1'), null);
+  });
+
+  test('@lock: error on #-1 result', () => {
+    const t = translateCommand('@lock #123=hasflag(%#,wizard)')!;
+    assert.ok(t.errorFromResult('#-1'));
+  });
+
+  // --- Untranslatable commands fall back to POST ---
+  test('&ATTR obj=val returns null (POST only)', () => {
+    assert.equal(translateCommand('&FN_GREET #123=Hello!'), null);
+  });
+
+  test('@power returns null (POST only)', () => {
+    assert.equal(translateCommand('@power #123=@a execscript'), null);
+  });
+
+  test('think returns null (POST only)', () => {
+    assert.equal(translateCommand('think setup complete'), null);
+  });
+
+  test('@fo returns null (POST only)', () => {
+    assert.equal(translateCommand('@fo me=@emit hello'), null);
   });
 });
