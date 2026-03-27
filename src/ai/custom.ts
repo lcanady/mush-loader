@@ -38,7 +38,7 @@ export async function vetWithCustom(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Custom AI endpoint error ${response.status}: ${body}`);
+    throw new Error(`Custom AI endpoint error ${response.status}: ${body.slice(0, 200)}`);
   }
 
   const text = await response.text();

@@ -39,7 +39,7 @@ export async function vetWithAnthropic(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Anthropic API error ${response.status}: ${body}`);
+    throw new Error(`Anthropic API error ${response.status}: ${body.slice(0, 200)}`);
   }
 
   const data = await response.json() as { content: Array<{ type: string; text: string }> };

@@ -9,19 +9,27 @@
  *
  * Both operations create files and open a PR via `gh`.
  */
-import { execSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+// import = require() compiles to `const cp = require(...)` in CJS —
+// no __importStar wrapper — so test mocks patching require('child_process')
+// affect the same object this module holds.
+import cp = require('child_process');
+import fs = require('fs');
 import { join } from 'path';
 import { VetResult } from './types';
 
 const PATTERNS_DIR = join(__dirname, '..', '..', 'mush-patterns');
 
 function patternsAvailable(): boolean {
-  return existsSync(PATTERNS_DIR) && existsSync(join(PATTERNS_DIR, '.git'));
+  return fs.existsSync(PATTERNS_DIR) && fs.existsSync(join(PATTERNS_DIR, '.git'));
 }
 
-function run(cmd: string, cwd: string): string {
-  return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
+/**
+ * Run a command without a shell (no string interpolation, no injection risk).
+ * args[0] is the binary; the rest are passed directly to the OS.
+ */
+function run(args: string[], cwd: string): string {
+  const [bin, ...rest] = args;
+  return cp.execFileSync(bin, rest, { cwd, encoding: 'utf-8' }).trim();
 }
 
 function slug(name: string): string {
@@ -97,27 +105,33 @@ ${author ? `\n## Author\n\n${author}` : ''}
 - Add a \`@rhost/testkit\` test snippet here before marking \`tested: true\`
 `;
 
-  mkdirSync(join(PATTERNS_DIR, 'patterns', domain), { recursive: true });
+  fs.mkdirSync(join(PATTERNS_DIR, 'patterns', domain), { recursive: true });
 
   // Don't overwrite existing patterns — append a sequence number
   let finalPath = filePath;
   let seq = 1;
-  while (existsSync(finalPath)) {
+  while (fs.existsSync(finalPath)) {
     finalPath = filePath.replace('.md', `-${String(seq).padStart(3, '0')}.md`);
     seq++;
   }
 
+  const prBody =
+    `Automatically extracted by mush-loader after a passing vet.\n\n` +
+    `## Summary\n${description}\n\n` +
+    `## Vet verdict\n${vetResult.verdict}: ${vetResult.summary}\n\n` +
+    `Added by mush-loader`;
+
   try {
-    run(`git checkout -b ${branch}`, PATTERNS_DIR);
-    writeFileSync(finalPath, content, 'utf-8');
-    run(`git add patterns/`, PATTERNS_DIR);
-    run(`git commit -m "feat: add pattern from mush-loader vet — ${name}"`, PATTERNS_DIR);
-    run(`git push -u origin ${branch}`, PATTERNS_DIR);
+    run(['git', 'checkout', '-b', branch], PATTERNS_DIR);
+    fs.writeFileSync(finalPath, content, 'utf-8');
+    run(['git', 'add', 'patterns/'], PATTERNS_DIR);
+    run(['git', 'commit', '-m', `feat: add pattern from mush-loader vet — ${name}`], PATTERNS_DIR);
+    run(['git', 'push', '-u', 'origin', branch], PATTERNS_DIR);
 
     const prUrl = run(
-      `gh pr create ` +
-      `--title "feat: pattern from mush-loader — ${name}" ` +
-      `--body $'Automatically extracted by mush-loader after a passing vet.\\n\\n## Summary\\n${description}\\n\\n## Vet verdict\\n${vetResult.verdict}: ${vetResult.summary}\\n\\n🤖 Added by mush-loader'`,
+      ['gh', 'pr', 'create',
+        '--title', `feat: pattern from mush-loader — ${name}`,
+        '--body', prBody],
       PATTERNS_DIR
     );
 
@@ -143,7 +157,7 @@ export async function recordAntiPattern(opts: {
 
   const { name, code, vetResult } = opts;
   const antiDir = join(PATTERNS_DIR, 'anti-patterns');
-  mkdirSync(antiDir, { recursive: true });
+  fs.mkdirSync(antiDir, { recursive: true });
 
   const filePath = join(antiDir, `${slug(name)}-${today()}.md`);
 
@@ -173,13 +187,13 @@ ${code}
 `;
 
   try {
-    writeFileSync(filePath, content, 'utf-8');
-    run(`git add anti-patterns/`, PATTERNS_DIR);
-    run(`git commit -m "chore: record failed vet anti-pattern — ${name}"`, PATTERNS_DIR);
+    fs.writeFileSync(filePath, content, 'utf-8');
+    run(['git', 'add', 'anti-patterns/'], PATTERNS_DIR);
+    run(['git', 'commit', '-m', `chore: record failed vet anti-pattern — ${name}`], PATTERNS_DIR);
     return { written: filePath };
   } catch (err) {
     // Non-fatal — write the file locally even if git commit fails
-    writeFileSync(filePath, content, 'utf-8');
+    fs.writeFileSync(filePath, content, 'utf-8');
     return { written: filePath };
   }
 }

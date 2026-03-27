@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "test:unit": "node --import tsx/esm --test tests/unit/*.test.ts",
+    "test:unit": "node --require tsx/cjs --test tests/unit/*.test.ts",
     "test:bootstrap": "tsx tests/bootstrap.test.ts",
     "test:commands": "tsx tests/commands.test.ts",
     "test:security": "tsx tests/security.test.ts",

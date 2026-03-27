@@ -52,7 +52,7 @@ export async function vetWithOpenAICompat(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`${provider} API error ${response.status}: ${body}`);
+    throw new Error(`${provider} API error ${response.status}: ${body.slice(0, 200)}`);
   }
 
   const data = await response.json() as {
