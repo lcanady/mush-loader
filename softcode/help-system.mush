@@ -1,0 +1,692 @@
+# +help system for RhostMUSH
+#
+# Features:
+#   - Topic lookup with case-insensitive matching
+#   - Visibility layers: hidden attributes (_HELP_*) and per-topic lock expressions
+#   - Lock presets (public/staff/royalty/wizard) + freeform MUSH lock strings
+#   - Categories with grouping in list output
+#   - Wizard audit view (+help/list/all)
+#   - External DB hooks (HOOK_FETCH on cache miss, HOOK_SYNC on write)
+#
+# Public commands:
+#   +help                      show index grouped by category
+#   +help <topic>              look up a topic
+#   +help/list                 all accessible topics grouped by category
+#   +help/list <cat>           topics in one category
+#   +help/search <kw>          keyword search (skips topics caller can't read)
+#   +help/cats                 list categories with descriptions
+#
+# Wizard commands:
+#   +help/set <topic>=<text>         create/update topic
+#   +help/set/hidden <topic>=<text>  create/update as hidden (attr _HELP_*)
+#   +help/set/lock <topic>=<preset|expr>  set read lock
+#   +help/set/unlock <topic>         clear read lock
+#   +help/delete <topic>             remove topic
+#   +help/reload <topic>             force-fetch from HOOK_FETCH
+#   +help/addcat <cat>=<desc>        create category
+#   +help/delcat <cat>               delete category
+#   +help/setcat <topic>=<cat>       assign topic to category
+#   +help/list/all                   audit view: all topics with locks
+#
+# Storage on HelpSystem <sys>:
+#   HELP_<TOPIC>         public topic text
+#   _HELP_<TOPIC>        hidden topic text (wizard-only visibility)
+#   HELPLOCK_<TOPIC>     MUSH lock expression (absent = public)
+#   HELPCAT_<TOPIC>      category name (absent = Uncategorized)
+#   CAT_<NAME>           category description
+#   CAT__INDEX           pipe-separated category list
+#   PRESET_*             configurable lock presets
+#   HOOK_FETCH           UDF called on cache miss (%0=topic)
+#   HOOK_SYNC            UDF called after set/delete (%0=op, %1=topic, %2=text)
+
+#!pre-install
+think Pre-install: checking wizard access...
+@switch/first 1= [not(hasflag(%#,wizard))], { think Pre-install FAILED: must be run as wizard. }
+#!end-pre-install
+
+# ---------------------------------------------------------------------------
+# Create system object
+# ---------------------------------------------------------------------------
+
+@create HelpSystem <sys>
+@set HelpSystem <sys>=inherit safe
+@fo me=&d.help me=search(name=HelpSystem <sys>)
+@lock HelpSystem <sys>=hasflag(%#,wizard)
+@lock/use HelpSystem <sys>=1
+
+&VERSION [v(d.help)]=1.0.0
+
+# ---------------------------------------------------------------------------
+# Lock presets — admin may override any of these
+# ---------------------------------------------------------------------------
+
+&PRESET_PUBLIC [v(d.help)]=1
+&PRESET_STAFF [v(d.help)]=haspower(%#,staff)
+&PRESET_ROYALTY [v(d.help)]=hasflag(%#,royalty)
+&PRESET_WIZARD [v(d.help)]=hasflag(%#,wizard)
+
+# ---------------------------------------------------------------------------
+# Hook stubs
+# ---------------------------------------------------------------------------
+
+# HOOK_FETCH: %0=topic. Return text or empty.
+&HOOK_FETCH [v(d.help)]=
+
+# HOOK_SYNC: %0=op(set|delete), %1=topic, %2=text. Return ignored.
+&HOOK_SYNC [v(d.help)]=
+
+# ---------------------------------------------------------------------------
+# Internal UDFs
+# ---------------------------------------------------------------------------
+
+# FN_WIZARD_CHECK: 1 if %0 has wizard flag
+&FN_WIZARD_CHECK [v(d.help)]= [hasflag(%0,wizard)]
+
+# FN_SAFE_TOPIC: validate + normalize topic name.
+# Allows: a-z 0-9 space hyphen underscore.
+# Returns normalized lowercase name, or empty on failure.
+&FN_SAFE_TOPIC [v(d.help)]= [setq(0,lcstr(trim(%0)))][if(and(gt(strlen(%q0),0),regmatchi(%q0,^[a-z0-9 _-]+$)),%q0,)]
+
+# FN_SAFE_CAT: validate + normalize category name (same rules as topic).
+&FN_SAFE_CAT [v(d.help)]= [setq(0,lcstr(trim(%0)))][if(and(gt(strlen(%q0),0),regmatchi(%q0,^[a-z0-9 _-]+$)),%q0,)]
+
+# FN_ATTR_NAME: normalized topic → attribute name.
+# "combat tips" → HELP_COMBAT_TIPS
+&FN_ATTR_NAME [v(d.help)]= [strcat(HELP_,ucstr(edit(%0,%b,_)))]
+
+# FN_HIDDEN_ATTR_NAME: normalized topic → hidden attribute name.
+# "combat tips" → _HELP_COMBAT_TIPS
+&FN_HIDDEN_ATTR_NAME [v(d.help)]= [strcat(_HELP_,ucstr(edit(%0,%b,_)))]
+
+# FN_CAT_ATTR_NAME: normalized category → attribute name.
+# "player basics" → CAT_PLAYER_BASICS
+&FN_CAT_ATTR_NAME [v(d.help)]= [strcat(CAT_,ucstr(edit(%0,%b,_)))]
+
+# FN_LOCK_ATTR_NAME: normalized topic → lock attribute name.
+# "combat" → HELPLOCK_COMBAT
+&FN_LOCK_ATTR_NAME [v(d.help)]= [strcat(HELPLOCK_,ucstr(edit(%0,%b,_)))]
+
+# FN_CAT_OF: return the category of a topic, or "Uncategorized".
+# %0 = normalized topic
+&FN_CAT_OF [v(d.help)]= [setq(0,get(v(d.help)/[strcat(HELPCAT_,ucstr(edit(%0,%b,_)))]))][if(%q0,ucfirst(%q0),Uncategorized)]
+
+# FN_RESOLVE_LOCK: resolve a preset name to a lock expression, or pass through freeform.
+# %0 = user-supplied lock value
+&FN_RESOLVE_LOCK [v(d.help)]= [setq(0,get(v(d.help)/[strcat(PRESET_,ucstr(%0))]))][if(%q0,%q0,%0)]
+
+# FN_CAN_READ: 1 if %0 (dbref) can read topic %1 (normalized).
+# Checks: hidden attr (wizard only) then lock attr.
+&FN_CAN_READ [v(d.help)]=
+  [setq(7,u(v(d.help)/FN_ATTR_NAME,%1))]
+  [setq(8,u(v(d.help)/FN_HIDDEN_ATTR_NAME,%1))]
+  [setq(9,u(v(d.help)/FN_LOCK_ATTR_NAME,%1))]
+  [if(
+    get(v(d.help)/%q8),
+    hasflag(%0,wizard),
+    [if(
+      get(v(d.help)/%q7),
+      [setq(6,get(v(d.help)/%q9))]
+      [if(%q6,
+        elock(v(d.help)/%q9,%0),
+        1
+      )],
+      0
+    )]
+  )]
+
+# FN_GET_HELP: retrieve text for topic %0 (normalized) as seen by %1 (dbref).
+# Returns text on success, empty on not-found or no-access.
+# Fix M1: prefer public text; fall back to hidden text for wizards only.
+&FN_GET_HELP [v(d.help)]=
+  [if(
+    u(v(d.help)/FN_CAN_READ,%1,%0),
+    [setq(7,u(v(d.help)/FN_ATTR_NAME,%0))]
+    [setq(8,u(v(d.help)/FN_HIDDEN_ATTR_NAME,%0))]
+    [setq(2,if(get(v(d.help)/%q7),get(v(d.help)/%q7),if(hasflag(%1,wizard),get(v(d.help)/%q8),)))]
+    [if(%q2,%q2,
+      [setq(3,u(v(d.help)/HOOK_FETCH,%0))]
+      [if(%q3,%q3,)]
+    )],
+  )]
+
+# FN_INDEX_ALL: return pipe-separated list of all topics visible to %0 (dbref).
+# Sources both HELP_* and _HELP_* (wizard only) attribute lists.
+&FN_INDEX_ALL [v(d.help)]=
+  [setq(0,iter(lattr(v(d.help)/HELP_*),lcstr(rest(##,_)),|,|))]
+  [if(
+    hasflag(%0,wizard),
+    [setq(1,iter(lattr(v(d.help)/_HELP_*),lcstr(rest(rest(##,_),_)),|,|))]
+    [setq(0,if(%q1,strcat(%q0,|,%q1),%q0))]
+  )]
+  [trim(%q0,b,|)]
+
+# FN_TOPICS_FOR_CAT: pipe-separated topics in category %0 visible to %1.
+# %0=category (normalized), %1=enactor dbref
+&FN_TOPICS_FOR_CAT [v(d.help)]=
+  [setq(9,u(v(d.help)/FN_INDEX_ALL,%1))]
+  [trim(iter(%q9,[if(and(u(v(d.help)/FN_CAN_READ,%1,##),eq(0,strcmp(lcstr(u(v(d.help)/FN_CAT_OF,##)),[if(%0,%0,uncategorized)]))),ucfirst(##),)],|,|),b,|)]
+
+# FN_INDEX_ADD: add topic to the HELP__INDEX (legacy — now derived from lattr).
+# Kept as no-op stub for compatibility; lattr-based FN_INDEX_ALL replaced it.
+&FN_INDEX_ADD [v(d.help)]=
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+# FN_HEADER: 78-char centered = header using printf.
+# printf() is ANSI-aware so color codes inside the arg don't skew alignment.
+# Format: $^78:=:s  →  center-justify, width 78, fill with =
+# The label is wrapped in [ ] using %[ for the open bracket (MUSH escape)
+# and chr(93) for ] to avoid closing the surrounding evaluation context.
+# %0 = title text, e.g. "Help" or "Help: Combat"
+&FN_HEADER [v(d.help)]= %ch[printf($^78:=:s,%[%b%0%b[chr(93)])]%cn
+
+# FN_FOOTER: 78-char = rule followed by optional hint lines.
+# printf($78:=:s,) fills all 78 chars with = when arg is empty.
+# %0 = hint lines (already %r-separated), or empty for rule only.
+&FN_FOOTER [v(d.help)]= [printf($78:=:s,)][if(%0,%r%0,)]
+
+# FN_CAT_HEADER: 78-char centered - divider for category groupings inside lists.
+# Format: $^78:-:s  →  center-justify, width 78, fill with -
+# %0 = category display name (e.g. "Combat")
+&FN_CAT_HEADER [v(d.help)]= [printf($^78:-:s,%b%0%b)]
+
+# FN_RENDER_TOPIC: format a single topic for display.
+# %0=normalized topic, %1=text
+&FN_RENDER_TOPIC [v(d.help)]= [u(v(d.help)/FN_HEADER,Help: [ucfirst(%0)])]%r%1%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help/list%cn' to see all topics.)]
+
+# FN_GROUPED_LIST: topic listing grouped by category, one topic per line.
+# Category names render as centered - divider headers (FN_CAT_HEADER).
+# %0 = enactor dbref
+&FN_GROUPED_LIST [v(d.help)]=
+  [setq(9,u(v(d.help)/FN_INDEX_ALL,%0))]
+  [setq(8,get(v(d.help)/CAT__INDEX))]
+  [setq(7,)]
+  [iter(
+    %q8,
+    [setq(6,u(v(d.help)/FN_TOPICS_FOR_CAT,##,%0))]
+    [if(%q6,
+      [setq(7,strcat(%q7,if(%q7,%r,),[u(v(d.help)/FN_CAT_HEADER,ucfirst(##))],%r,iter(sort(%q6),ucfirst(##),|,%r)))]
+    )],
+    |,|
+  )]
+  [setq(5,u(v(d.help)/FN_TOPICS_FOR_CAT,,%0))]
+  [if(%q5,
+    [setq(7,strcat(%q7,if(%q7,%r,),[u(v(d.help)/FN_CAT_HEADER,Uncategorized)],%r,iter(sort(%q5),ucfirst(##),|,%r)))]
+  )]
+  [if(%q7,%q7,No help topics are defined yet.)]
+
+# ---------------------------------------------------------------------------
+# +help — bare index
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_BARE [v(d.help)]=$+help:
+  @pemit %#=[u(v(d.help)/FN_HEADER,Help)]%r[u(v(d.help)/FN_GROUPED_LIST,%#)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.%r* Type '%ch+help/search <kw>%cn' to search.%r* Type '%ch+help/cats%cn' to see categories.)]
+
+# ---------------------------------------------------------------------------
+# +help/cats — list categories
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_CATS [v(d.help)]=$+help/cats:
+  @switch/first 1=
+    [not(get(v(d.help)/CAT__INDEX))], {
+      @pemit %#=No categories defined. Use +help/addcat <cat>=<desc> to add one.
+    },
+    {
+      @pemit %#=[u(v(d.help)/FN_HEADER,Help: Categories)]%r[iter(get(v(d.help)/CAT__INDEX),[if(or(not(regmatchi(##,^_)),hasflag(%#,wizard)),strcat(%ch,ucfirst(##),%cn — ,get(v(d.help)/[u(v(d.help)/FN_CAT_ATTR_NAME,##)])),)],|,%r)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help/list <cat>%cn' to list topics in a category.)]
+    }
+
+# ---------------------------------------------------------------------------
+# +help/list [cat] — topic listing
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_LIST_BARE [v(d.help)]=$+help/list:
+  @pemit %#=[u(v(d.help)/FN_HEADER,Help)]%r[u(v(d.help)/FN_GROUPED_LIST,%#)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.)]
+
+&CMD_HELP_LIST_CAT [v(d.help)]=$+help/list *:
+  @switch/first 1=
+    [not(%0)], {
+      @trigger [v(d.help)]/CMD_HELP_LIST_BARE
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_LIST_CAT=%0,%#
+    }
+
+&TR_HELP_LIST_CAT [v(d.help)]=
+  [setq(0,u(v(d.help)/FN_SAFE_CAT,%0))]
+  @switch/first 1=
+    [not(%q0)], {
+      @pemit %1=Invalid category name.
+    },
+    {
+      [setq(6,u(v(d.help)/FN_TOPICS_FOR_CAT,%q0,%1))]
+      [if(
+        %q6,
+        @pemit %1=[u(v(d.help)/FN_HEADER,Help)]%r[u(v(d.help)/FN_CAT_HEADER,ucfirst(%q0))]%r[iter(sort(%q6),ucfirst(##),|,%r)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.)],
+        @pemit %1=No accessible topics in category "%q0".
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# +help/list/all — wizard audit view
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_LIST_ALL [v(d.help)]=$+help/list/all:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_LIST_ALL=%#
+    }
+
+&TR_HELP_LIST_ALL [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%0))], {
+      @pemit %0=Permission denied.
+    },
+    {
+      [setq(9,u(v(d.help)/FN_INDEX_ALL,%0))]
+      @pemit %0=
+        [u(v(d.help)/FN_HEADER,Help: All Topics)]%r
+        [if(
+          %q9,
+          iter(%q9,
+            [setq(7,get(v(d.help)/[u(v(d.help)/FN_LOCK_ATTR_NAME,##)]))]
+            strcat(ucfirst(##),%b,[u(v(d.help)/FN_CAT_OF,##)],%b,[if(%q7,strcat(%ch[lock: ,%q7,]%cn),public)]),
+            |,%r
+          ),
+          No topics defined.
+        )]%r
+        [u(v(d.help)/FN_FOOTER,)]
+    }
+
+# ---------------------------------------------------------------------------
+# +help/search <kw>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_SEARCH [v(d.help)]=$+help/search *:
+  @switch/first 1=
+    [not(%0)], {
+      @pemit %#=Usage: +help/search <keyword>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SEARCH=%0,%#
+    }
+
+&TR_HELP_SEARCH [v(d.help)]=
+  # Fix M2: use strsearch() (literal substring) instead of match() (glob).
+  # match() treats user input as a glob pattern — searching for * matches everything.
+  # strsearch() returns position >= 0 on match, -1 on miss — no glob interpretation.
+  [setq(0,lcstr(trim(%0)))]
+  [setq(9,u(v(d.help)/FN_INDEX_ALL,%1))]
+  [setq(1,trim(iter(%q9,[if(and(u(v(d.help)/FN_CAN_READ,%1,##),or(gte(strsearch(##,%q0),0),gte(strsearch(lcstr(get(v(d.help)/[u(v(d.help)/FN_ATTR_NAME,##)])),%q0),0),gte(strsearch(lcstr(get(v(d.help)/[u(v(d.help)/FN_HIDDEN_ATTR_NAME,##)])),%q0),0))),ucfirst(##),)],|,|),b,|))]
+  @pemit %1=
+    [if(
+      %q1,
+      strcat(
+        u(v(d.help)/FN_HEADER,Help: Search),%r,
+        iter(sort(%q1),ucfirst(##),|,%r),%r,
+        u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.)
+      ),
+      strcat(
+        u(v(d.help)/FN_HEADER,Help: Search),%r,
+        No help topics matched "%q0".,%r,
+        u(v(d.help)/FN_FOOTER,)
+      )
+    )]
+
+# ---------------------------------------------------------------------------
+# +help/set <topic>=<text>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_SET [v(d.help)]=$+help/set *=*:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/set <topic>=<text>
+    },
+    [not(u(v(d.help)/FN_SAFE_TOPIC,%0))], {
+      @pemit %#=Invalid topic name. Use letters, numbers, spaces, hyphens, underscores only.
+    },
+    [not(%1)], {
+      @pemit %#=Help text cannot be empty.
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SET=%0,%1,%#,0
+    }
+
+# +help/set/hidden <topic>=<text>
+&CMD_HELP_SET_HIDDEN [v(d.help)]=$+help/set/hidden *=*:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/set/hidden <topic>=<text>
+    },
+    [not(u(v(d.help)/FN_SAFE_TOPIC,%0))], {
+      @pemit %#=Invalid topic name.
+    },
+    [not(%1)], {
+      @pemit %#=Help text cannot be empty.
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SET=%0,%1,%#,1
+    }
+
+# TR_HELP_SET: %0=topic, %1=text, %2=enactor, %3=hidden(1/0)
+&TR_HELP_SET [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%2))], {
+      @pemit %2=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      [setq(1,if(%3,u(v(d.help)/FN_HIDDEN_ATTR_NAME,%q0),u(v(d.help)/FN_ATTR_NAME,%q0)))]
+      &%q1 [v(d.help)]=%1;
+      @trigger [v(d.help)]/TR_HOOK_SYNC=set,%q0,%1;
+      @pemit %2=%ch%cg[if(%3,Hidden help,Help)] set:%cn %q0
+    }
+
+# ---------------------------------------------------------------------------
+# +help/set/lock <topic>=<preset|expr>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_SET_LOCK [v(d.help)]=$+help/set/lock *=*:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/set/lock <topic>=<preset or lock expression>
+    },
+    [not(u(v(d.help)/FN_SAFE_TOPIC,%0))], {
+      @pemit %#=Invalid topic name.
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SET_LOCK=%0,%1,%#
+    }
+
+&TR_HELP_SET_LOCK [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%2))], {
+      @pemit %2=Permission denied.
+    },
+    # Fix H1+H2: reject semicolons AND brackets — both are injection vectors.
+    # Brackets execute arbitrary code during trigger attribute evaluation.
+    # Use edit()-length comparison to detect [ and ] without using them in regex.
+    [or(gt(match(%1,*;*),0),gt(strlen(%1),strlen(edit(%1,%[,))),gt(strlen(%1),strlen(edit(%1,],))))], {
+      @pemit %2=Lock expressions may not contain semicolons or brackets.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      [setq(1,u(v(d.help)/FN_LOCK_ATTR_NAME,%q0))]
+      [setq(2,u(v(d.help)/FN_RESOLVE_LOCK,%1))]
+      &%q1 [v(d.help)]=%q2;
+      @pemit %2=%ch%cgLock set:%cn %q0 → %q2
+    }
+
+# +help/set/unlock <topic>
+&CMD_HELP_SET_UNLOCK [v(d.help)]=$+help/set/unlock *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/set/unlock <topic>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SET_UNLOCK=%0,%#
+    }
+
+&TR_HELP_SET_UNLOCK [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%1))], {
+      @pemit %1=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      [setq(1,u(v(d.help)/FN_LOCK_ATTR_NAME,%q0))]
+      &%q1 [v(d.help)]=;
+      @pemit %1=%ch%cgLock cleared:%cn %q0
+    }
+
+# ---------------------------------------------------------------------------
+# +help/delete <topic>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_DELETE [v(d.help)]=$+help/delete *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/delete <topic>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_DELETE=%0,%#
+    }
+
+&TR_HELP_DELETE [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%1))], {
+      @pemit %1=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      &[u(v(d.help)/FN_ATTR_NAME,%q0)] [v(d.help)]=;
+      &[u(v(d.help)/FN_HIDDEN_ATTR_NAME,%q0)] [v(d.help)]=;
+      &[u(v(d.help)/FN_LOCK_ATTR_NAME,%q0)] [v(d.help)]=;
+      &[strcat(HELPCAT_,ucstr(edit(%q0,%b,_)))] [v(d.help)]=;
+      @trigger [v(d.help)]/TR_HOOK_SYNC=delete,%q0,;
+      @pemit %1=Help topic deleted: %q0
+    }
+
+# ---------------------------------------------------------------------------
+# +help/reload <topic>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_RELOAD [v(d.help)]=$+help/reload *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/reload <topic>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_RELOAD=%0,%#
+    }
+
+&TR_HELP_RELOAD [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%1))], {
+      @pemit %1=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      [setq(2,u(v(d.help)/HOOK_FETCH,%q0))]
+      [if(
+        %q2,
+        &[u(v(d.help)/FN_ATTR_NAME,%q0)] [v(d.help)]=%q2;
+        @pemit %1=Reloaded from hook: %q0,
+        @pemit %1=HOOK_FETCH returned nothing for "%q0". Topic unchanged.
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# +help/addcat <cat>=<desc>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_ADDCAT [v(d.help)]=$+help/addcat *=*:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/addcat <category>=<description>
+    },
+    [not(u(v(d.help)/FN_SAFE_CAT,%0))], {
+      @pemit %#=Invalid category name.
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_ADDCAT=%0,%1,%#
+    }
+
+&TR_HELP_ADDCAT [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%2))], {
+      @pemit %2=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_CAT,%0))]
+      [setq(1,u(v(d.help)/FN_CAT_ATTR_NAME,%q0))]
+      &%q1 [v(d.help)]=%1;
+      [setq(8,get(v(d.help)/CAT__INDEX))]
+      [if(not(member(%q8,%q0,|)),
+        &CAT__INDEX [v(d.help)]=[if(%q8,strcat(%q8,|,%q0),%q0)]
+      )];
+      @pemit %2=%ch%cgCategory added:%cn %q0
+    }
+
+# ---------------------------------------------------------------------------
+# +help/delcat <cat>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_DELCAT [v(d.help)]=$+help/delcat *:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/delcat <category>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_DELCAT=%0,%#
+    }
+
+&TR_HELP_DELCAT [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%1))], {
+      @pemit %1=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_CAT,%0))]
+      # Remove cat attr
+      &[u(v(d.help)/FN_CAT_ATTR_NAME,%q0)] [v(d.help)]=;
+      # Remove from index
+      [setq(8,get(v(d.help)/CAT__INDEX))]
+      &CAT__INDEX [v(d.help)]=[trim(iter(%q8,[if(eq(0,strcmp(##,%q0)),,##)],|,|),b,|)];
+      # Clear category assignment on all topics that used this cat (set to empty = Uncategorized)
+      [iter(
+        lattr(v(d.help)/HELPCAT_*),
+        [if(eq(0,strcmp(lcstr(get(v(d.help)/##)),lcstr(%q0))),
+          &## [v(d.help)]=
+        )],
+        |,|
+      )];
+      @pemit %1=Category deleted: %q0 (topics moved to Uncategorized)
+    }
+
+# ---------------------------------------------------------------------------
+# +help/setcat <topic>=<cat>
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_SETCAT [v(d.help)]=$+help/setcat *=*:
+  @switch/first 1=
+    [not(hasflag(%#,wizard))], {
+      @pemit %#=Permission denied.
+    },
+    [not(%0)], {
+      @pemit %#=Usage: +help/setcat <topic>=<category>
+    },
+    {
+      @trigger [v(d.help)]/TR_HELP_SETCAT=%0,%1,%#
+    }
+
+&TR_HELP_SETCAT [v(d.help)]=
+  @switch/first 1=
+    [not(u(v(d.help)/FN_WIZARD_CHECK,%2))], {
+      @pemit %2=Permission denied.
+    },
+    {
+      [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+      [setq(1,u(v(d.help)/FN_SAFE_CAT,%1))]
+      &[strcat(HELPCAT_,ucstr(edit(%q0,%b,_)))] [v(d.help)]=%q1;
+      @pemit %2=%ch%cgCategory set:%cn %q0 → %q1
+    }
+
+# ---------------------------------------------------------------------------
+# Hook sync trigger
+# ---------------------------------------------------------------------------
+
+&TR_HOOK_SYNC [v(d.help)]= [u(v(d.help)/HOOK_SYNC,%0,%1,%2)]
+
+# ---------------------------------------------------------------------------
+# +help <topic> — lookup (MUST be last — wildcard)
+# ---------------------------------------------------------------------------
+
+&CMD_HELP_TOPIC [v(d.help)]=$+help *:
+  @trigger [v(d.help)]/TR_HELP_TOPIC=%0,%#
+
+&TR_HELP_TOPIC [v(d.help)]=
+  [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
+  @switch/first 1=
+    [not(%q0)], {
+      @pemit %1=Invalid topic name.
+    },
+    {
+      [setq(2,u(v(d.help)/FN_GET_HELP,%q0,%1))]
+      [if(
+        %q2,
+        @pemit %1=[u(v(d.help)/FN_RENDER_TOPIC,%q0,%q2)],
+        @pemit %1=No help found for "%q0". Type %ch+help/list%cn to see available topics.
+      )]
+    }
+
+# ---------------------------------------------------------------------------
+# In-game help attributes
+# These are stored on HelpSystem <sys> and displayed by +help <topic>.
+# ---------------------------------------------------------------------------
+
+&HELP_HELP [v(d.help)]=+HELP [<topic>]%rType +help <topic> to read a help entry.%rType +help/list to see all available topics.%rType +help/search <keyword> to search topic names and text.%rType +help/cats to see topic categories.%r%rSee also: +help/list, +help/search, +help/cats
+
+&HELP_HELP_LIST [v(d.help)]=+HELP/LIST [<category>]%rWithout an argument: lists all topics you can read, grouped by category.%rWith a category name: lists only topics in that category.%r%rExamples:%r  +help/list             -- all topics%r  +help/list combat      -- topics in the Combat category%r%rSee also: +help, +help/cats, +help/search
+
+&HELP_HELP_SEARCH [v(d.help)]=+HELP/SEARCH <keyword>%rSearches topic names and text for <keyword>.%rTopics you cannot read are excluded from results.%r%rExamples:%r  +help/search sword     -- topics mentioning sword%r  +help/search staff     -- topics mentioning staff%r%rSee also: +help, +help/list
+
+&HELP_HELP_CATS [v(d.help)]=+HELP/CATS%rLists all categories with their descriptions.%rHidden categories (names starting with _) are visible to wizards only.%r%rSee also: +help/list, +help/addcat
+
+&HELP_HELP_SET [v(d.help)]=+HELP/SET <topic>=<text>   (wizard)%rCreates or updates a help topic. The topic is public by default.%rTopic names: letters, numbers, spaces, hyphens, underscores.%r%rSwitches:%r  /hidden   Create as hidden (wizard-only visibility).%r  /lock     Set a read lock. Usage: +help/set/lock <topic>=<preset|expr>%r  /unlock   Clear the read lock. Usage: +help/set/unlock <topic>%r%rExamples:%r  +help/set combat=Fighting rules go here.%r  +help/set/hidden staffnotes=Internal procedures.%r  +help/set/lock combat=staff%r  +help/set/lock combat=haspower(%#,builder)%r  +help/set/unlock combat%r%rSee also: +help/delete, +help/set/lock, +help/set/hidden
+
+&HELP_HELP_SET_HIDDEN [v(d.help)]=+HELP/SET/HIDDEN <topic>=<text>   (wizard)%rCreates or updates a hidden help topic.%rHidden topics are stored as _HELP_<TOPIC> attributes and are completely%rinvisible to non-wizards — they do not appear in +help/list or +help/search%rand return "No help found" when accessed by a non-wizard.%r%rExample:%r  +help/set/hidden staffwiki=Internal staff reference.%r%rSee also: +help/set, +help/set/lock, +help/list/all
+
+&HELP_HELP_SET_LOCK [v(d.help)]=+HELP/SET/LOCK <topic>=<preset|expression>   (wizard)%rSets a read lock on a topic. Players who fail the lock see "No help found".%r%rPresets:%r  public    Everyone (clears the lock)%r  staff     haspower(%#,staff)%r  royalty   hasflag(%#,royalty)%r  wizard    hasflag(%#,wizard)%r%rOr supply any valid MUSH lock expression directly.%rNote: semicolons are rejected to prevent injection.%r%rExamples:%r  +help/set/lock combat=staff%r  +help/set/lock viproom==<dbref>%r  +help/set/lock builders=haspower(%#,builder)|hasflag(%#,wizard)%r%rSee also: +help/set/unlock, +help/list/all
+
+&HELP_HELP_SET_UNLOCK [v(d.help)]=+HELP/SET/UNLOCK <topic>   (wizard)%rClears the read lock on a topic, making it public.%rDoes not affect the hidden (_HELP_*) status of the topic.%r%rExample:%r  +help/set/unlock combat%r%rSee also: +help/set/lock
+
+&HELP_HELP_DELETE [v(d.help)]=+HELP/DELETE <topic>   (wizard)%rPermanently removes a topic and all its metadata (lock, category).%rThe topic is removed from all lists immediately.%r%rExample:%r  +help/delete oldtopic%r%rSee also: +help/set
+
+&HELP_HELP_RELOAD [v(d.help)]=+HELP/RELOAD <topic>   (wizard)%rForce-fetches a topic from the HOOK_FETCH external hook and stores the result.%rUse this to refresh a topic after editing it in an external database.%rIf HOOK_FETCH returns nothing, the local text is left unchanged.%r%rExample:%r  +help/reload combat%r%rSee also: HOOK_FETCH (set on HelpSystem <sys>)
+
+&HELP_HELP_ADDCAT [v(d.help)]=+HELP/ADDCAT <category>=<description>   (wizard)%rCreates a new category with the given description.%rCategory names follow the same rules as topic names.%rPrefix with _ to create a wizard-only hidden category.%r%rExamples:%r  +help/addcat combat=Fighting, abilities, and tactics%r  +help/addcat _staffonly=Internal staff reference%r%rSee also: +help/delcat, +help/setcat, +help/cats
+
+&HELP_HELP_DELCAT [v(d.help)]=+HELP/DELCAT <category>   (wizard)%rDeletes a category. All topics assigned to it become Uncategorized.%rTheir text is not deleted — only the category assignment is cleared.%r%rExample:%r  +help/delcat oldcategory%r%rSee also: +help/addcat, +help/setcat
+
+&HELP_HELP_SETCAT [v(d.help)]=+HELP/SETCAT <topic>=<category>   (wizard)%rAssigns a topic to a category. The category must exist (use +help/addcat first).%rTo move a topic to Uncategorized, set it to an empty string or a non-existent category.%r%rExample:%r  +help/setcat combat-basics=combat%r%rSee also: +help/addcat, +help/cats
+
+&HELP_HELP_LIST_ALL [v(d.help)]=+HELP/LIST/ALL   (wizard)%rAudit view. Shows every topic — including hidden — with its lock expression%rand category assignment.%r%rOutput format:%r  <topic>   [<category>]   <lock or "public">%r%rSee also: +help/set/lock, +help/set/hidden
+
+#!post-install
+think Post-install: HelpSystem installed at [search(name=HelpSystem <sys>)].
+think Public  : +help, +help <topic>, +help/list [cat], +help/search <kw>, +help/cats
+think Wizard  : +help/set, +help/set/hidden, +help/set/lock, +help/set/unlock
+think Wizard  : +help/delete, +help/reload, +help/addcat, +help/delcat, +help/setcat
+think Wizard  : +help/list/all
+think Presets : public, staff, royalty, wizard (override PRESET_* attrs to customize)
+think Hooks   : set HOOK_FETCH / HOOK_SYNC on [search(name=HelpSystem <sys>)] for external DB
+#!end-post-install

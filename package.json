@@ -13,7 +13,8 @@
     "test:bootstrap": "tsx tests/bootstrap.test.ts",
     "test:commands": "tsx tests/commands.test.ts",
     "test:security": "tsx tests/security.test.ts",
-    "test": "npm run test:unit && tsx tests/bootstrap.test.ts && tsx tests/commands.test.ts && tsx tests/security.test.ts"
+    "test:help": "tsx tests/help-system.test.ts",
+    "test": "npm run test:unit && tsx tests/bootstrap.test.ts && tsx tests/commands.test.ts && tsx tests/security.test.ts && tsx tests/help-system.test.ts"
   },
   "keywords": ["mush", "mushcode", "rhostmush", "softcode", "loader"],
   "author": "",
