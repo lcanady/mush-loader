@@ -6,8 +6,17 @@
   "bin": {
     "mush-loader": "./bin/mush-loader"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "softcode/",
+    "scripts/",
+    "prompts/",
+    "completions/"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "dev": "tsx src/cli.ts",
     "test:unit": "node --require tsx/cjs --test tests/unit/*.test.ts",
     "test:bootstrap": "tsx tests/bootstrap.test.ts",
