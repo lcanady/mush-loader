@@ -41,7 +41,7 @@ Test the connection:
 
 ```bash
 source /opt/mush-loader/config/loader.conf
-mush-loader registry
+mush-loader status
 ```
 
 ---
