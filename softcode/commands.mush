@@ -56,14 +56,19 @@
 
 # FN_EXEC: run mush-loader CLI via execscript.
 # Calls the 'mload' wrapper script that must exist in your game's execscripthome.
-# %0 = subcommand (e.g. "load"), %1 = pre-validated safe argument (path or pkg name)
-# The subcommand is hardcoded by each caller — only %1 is user-supplied,
-# and it must already be validated through FN_SAFE_PATH/FN_SAFE_PKG first.
+# %0 = subcommand — must be one of the allowlisted values below (hardcoded by callers).
+# %1 = pre-validated safe argument (path or pkg name) — pass empty to omit.
+# Defense-in-depth: even though all callers hardcode %0, the allowlist ensures
+# no future caller can accidentally pass user input as the subcommand.
 # See: scripts/mload and docs/game-setup.md Step 5
 &FN_EXEC [v(d.mload)]=
-  [if(%1,
-    execscript(mload, %0, %1),
-    execscript(mload, %0)
+  [if(
+    not(member(load vet install registry status, %0)),
+    #-1 INVALID SUBCOMMAND,
+    if(%1,
+      execscript(mload, %0, %1),
+      execscript(mload, %0)
+    )
   )]
 
 # ---------------------------------------------------------------------------

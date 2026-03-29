@@ -42,6 +42,64 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; message: string; severity: Ve
     message: 'Attempt to destroy #1 (Master Room)',
     severity: 'error',
   },
+  // @fo/@force with user-controlled target or command — classic privilege escalation
+  {
+    pattern: /@(?:fo|force)\s+%[0-9#]/i,
+    message: '@fo/@force with user-controlled object — attacker can force themselves or others to run arbitrary code',
+    severity: 'error',
+  },
+  {
+    pattern: /@(?:fo|force)\s+[^=]+=.*%[0-9]/i,
+    message: '@fo/@force passes user input as the forced command — injection risk',
+    severity: 'error',
+  },
+  // @trigger with user-controlled attribute name lets callers fire arbitrary attrs
+  {
+    pattern: /@trigger\s+[^/=]+=%[0-9]/i,
+    message: '@trigger attribute name is user-controlled — arbitrary attribute execution',
+    severity: 'error',
+  },
+  // @function without /safe — inherits caller permissions and can escalate
+  {
+    pattern: /@(?:a)?function(?!\/safe)\s/i,
+    message: '@function defined without /safe — inherits caller permissions; use @function/safe',
+    severity: 'warn',
+  },
+  // get()/xget() with user-controlled first argument — reads arbitrary attributes
+  {
+    pattern: /\bx?get\s*\(\s*%[0-9]/i,
+    message: 'get()/xget() called with user-controlled object — can read any readable attribute',
+    severity: 'warn',
+  },
+  // @chown with user-controlled target object or new owner
+  {
+    pattern: /@chown\s+%[0-9]/i,
+    message: '@chown target is user-controlled — may transfer ownership of unintended objects',
+    severity: 'error',
+  },
+  {
+    pattern: /@chown\s+[^=]+=%[0-9]/i,
+    message: '@chown new owner is user-controlled — may assign ownership to any player',
+    severity: 'error',
+  },
+  // @tel/@teleport with user-controlled destination — location-bypass attacks
+  {
+    pattern: /@tel(?:eport)?\s+[^=]+=%[0-9]/i,
+    message: '@tel destination is user-controlled — may bypass location locks',
+    severity: 'warn',
+  },
+  // @newpassword — always suspicious in softcode
+  {
+    pattern: /@newpassword\s/i,
+    message: "@newpassword used — changes a player's password; verify this is intentional and wizard-locked",
+    severity: 'error',
+  },
+  // @su/@sudo — privilege switch, must be wizard-only
+  {
+    pattern: /@su(?:do)?\s/i,
+    message: '@su/@sudo used — switches privilege context; must be locked to wizard',
+    severity: 'error',
+  },
 ];
 
 // Patterns that are suspicious but not necessarily wrong

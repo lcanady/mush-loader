@@ -1,0 +1,346 @@
+# Rockpath's Jobs System v2.1.3 — RhostMUSH fixed + SR4 hooks
+#
+# A full staff job-ticket system with player-facing +request commands.
+#
+# This file combines three layers in install order:
+#   1. Core system  (RockJobs.fixed.mush — B1-B16 + I13 fixes over upstream 2.1.3)
+#   2. Help system  (help.mush — per-topic +jobs/help dispatch + expanded player help)
+#   3. Security     (security.mush — SAFE flags, INHERIT removal, injection guards)
+#
+# Staff commands:
+#   +job/create <Cat>/<Topic>=<Body>  Create a job ticket
+#   +jobs                             List all open jobs by tier
+#   +job <#>                          View a single job
+#   +job/complete <#>=<comment>       Close as complete; fires HOOK_ON_COMPLETE
+#   +job/approve <#>=<comment>        Close as approved; fires HOOK_ON_APPROVE
+#   +job/deny <#>=<comment>           Close as denied; fires HOOK_ON_DENY
+#   +job/comment <#>=<comment>        Append comment; fires HOOK_ON_COMMENT
+#   +job/claim <#>                    Claim as handler
+#   +job/assign <#>=<staff>           Assign to another staff member
+#   +job/status <#>=<value>           Set progress (new/underway/hold/done/25/50/75/100)
+#   +job/urgency <#>=<1-4|color>      Set urgency level
+#   +job/rename <#>=<title>           Rename job
+#   +job/cat <#>=<category>           Move to different category
+#   +job/tier <#>=[!]<tier>           Set/remove tier access
+#   +job/delete <#>                   Delete without ruling
+#   +jobs/mine                        List jobs assigned to you
+#   +jobs/cat <category>              Filter job list by category
+#   +jobs/reorder                     Compress job numbering
+#   +jobs/help [<topic>]              In-game help
+#
+# Player commands:
+#   +request/create <Cat>/<Topic>=<Body>  Submit a request
+#   +requests                             List your own requests
+#   +request <#>                          View one of your requests
+#   +request/comment <#>=<comment>        Comment on your request
+#   +request/cancel <#>                   Cancel your request
+#   +request/help                         Player help
+#
+# Outbound hooks (on Rockpath's Jobs System — empty stubs, set at SR4 install time):
+#   HOOK_ON_COMPLETE  %0=category  %1=requester-dbref  %2=staff-comment
+#   HOOK_ON_APPROVE   %0=category  %1=requester-dbref  %2=staff-comment
+#   HOOK_ON_DENY      %0=category  %1=requester-dbref  %2=staff-comment
+#   HOOK_ON_COMMENT   %0=job-dbref %1=category %2=commenter-dbref %3=comment-text
+#
+# Inbound API — call these from SR4 systems (no staff check, trusted internal):
+#   u(<rj-db>/fn`create-job, category, topic, body, requester_dbref)
+#     %3=requester override; omit to use %# as requester
+#   u(<rj-db>/fn`complete-job, job_dbref, comment)
+#   u(<rj-db>/fn`approve-job, job_dbref, comment)
+#   u(<rj-db>/fn`deny-job, job_dbref, comment)
+#   u(<rj-db>/fn`get-job, job_number)   -> job dbref or empty
+#   u(<rj-db>/fn`cancel-request, job_dbref)
+#
+# At SR4 install time, store the Job Database dbref on each SR4 sys object:
+#   &_RJ_DB SR4 Karma <sys>=[num(Rockpath's Job Database)]
+#
+# SR4 categories added: KARMA, RUN  (CG and PLOT were already present)
+#
+# Changes from upstream v2.1.3:
+#   B1   FN`URGENT: removed unmatched trailing )]
+#   B2   CMD`ASSIGN: register fix + mailsend() for RhostMUSH
+#   B3   CMD`TIER: %q8/%q9 positional registers
+#   B4   Removed @toggle PENN_MAIL (not valid in RhostMUSH)
+#   B5   CMD`MYJOBS: @assert -> @break
+#   B6   CMD`STATUS: added missing command handler
+#   B7   FN`PROMPT: case-insensitive, req/default cases
+#   B8   FN`SHOWJOB/CREATE-JOB/mail fns: desc not describe
+#   B9   Version string corrected to 2.1.3
+#   B10  CMD`REQ-COMMENT: proper validation order
+#   B16  All job lists: removed revwords() — ascending order
+#   I13  CMD`FILTERCAT: +jobs/cat <Category> filter command
+#   SR4  HOOK_ON_COMPLETE/APPROVE/DENY/COMMENT outbound hooks
+#   SR4  FN`CREATE-JOB: %3 requester override
+#   SR4  LIST`CATEGORIES: added KARMA, RUN
+#   SEC  SAFE flags, @lock/use on Job Database, INHERIT removed from Jobs System
+#   SEC  isnum() guards on CMD`VIEW-REQ + CMD`CANCEL
+#   SEC  Bracket-injection guards on CMD`REQ-ADD + CMD`REQ-COMMENT
+#   SEC  Bracket-injection guards on CMD`RENAME + CMD`COMMENT (stored injection M-RJ-01/02)
+#
+# Requirements:
+#   RhostMUSH with mailsend() available
+#   Wizard-level installer account
+#   Paste as Wizard or use: mush-loader load rockjobs.mush
+#
+# Tests: rockjobs/tests/rockjobs.test.ts
+
+#!pre-install
+think Pre-install: checking wizard access for RockJobs install...
+#!end-pre-install
+
+# ---------------------------------------------------------------------------
+# Core system — Rockpath's Jobs System v2.1.3 (fixed)
+# ---------------------------------------------------------------------------
+
+@pemit me=[repeat(=,78)]%r[center(Constructing Rockpath's Job System v 2.1.3,78)]%r[repeat(-,78)]%rPlease wait...%r
+
+@pemit me=Setting the SIDEFX flag on yourself to build this.
+@set me=sidefx
+
+@eval [setq(0, [create(Rockpath's Jobs System)])][setq(1, [create(Rockpath's Job Database)])][set(%q0, database:%q1)][set(%q1, system:%q0)]
+
+@set me=quiet
+
+@lock Rockpath's Jobs System=me
+
+@@ I13: added +jobs/cat to help text; fixed typo "chnanged" -> "changed"
+@Desc Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Rockpath's Jobs System Help)] >)]%r[u([v(database)]/fn`formathelp, {+job/create Category/Topic=Contents - Create a new job. Categories are: [elist([get([v(database)]/list`categories)],,,,,[ansi(y, %0)])]%r+jobs - Look at all the jobs%r+job <#> - Look at the details of a job.%r+jobs/reorder - Reorganize the jobs. Known as 'compress'%r+job/delete <#> - Delete a job. There will be some records created%r+job/approve #=<comment> - Approve a job. If you don't want to add a comment, then leave it blank. But keep the = sign.%r+job/deny <#>=<comment> - Deny a job. If you don't want to add a comment, then leave it blank. But keep the = sign.%r+job/complete <#>=<comment> - Complete a job. If you don't want to add a comment, then leave it blank. But keep the = sign.%r+job/status <#>=<new|underway|hold|done|25|50|75|100> - Set the progress of the job%r+job/comment <#>=<comment> - Comment on a job. This is simply appended to the job description.%r+job/cat <#>=<Category> - Move the job from one Category to another. Tier is not changed automatically.%r+job/urgency <#>=<1-4|red|yellow|green> - Set the urgency of a job.%r+job/rename <#>=<New Name> - Rename a job. It does /not/ change the Number of a job.%r+job/claim <#> - Claim a job for yourself.%r+job/assign <#>=<Staff Member> - Assign a job to another person. This command will alert other Staff.%r+jobs/mine - List jobs assigned to you.%r+jobs/cat <Category> - List jobs filtered by category.%r+job/tier <#>=[!]<Tier> - Set a job to Tier-level access. Placing a ! in front of the tier removes its access (be sure to always leave at least one level of access.)})]%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&CMD`ADD Rockpath's Jobs System=$+job/create */*=*:@break [u([v(database)]/bool`is-staff)]={@break [t([match([get([v(database)]/list`categories)], %0)])]={@eval [u([v(database)]/fn`create-job, %0, %1, %2)];@pemit %#=[u([v(database)]/fn`prompt, req)] You have created a new Job under the [ansi(y, [ucstr(%0)])] category.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].};@pemit %#=[error()]
+
+@@ B16: removed revwords() — jobs display in ascending (creation) order
+&CMD`VIEW-ALL Rockpath's Jobs System=$+jobs:@break [u([v(database)]/bool`is-staff)]={@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, [mudname() Jobs])] >)]%r[ansi(c, [printf($3^s $6-s $12-s $25-s $6-s $12-s $8^s, #, Type, Requester, Job Title, Start, Handler, Status)])]%r[repeat(-, 78)]};@skip/ifelse [t([lcon([v(database)]/object)])]={@eval [iter([lcon([v(database)]/object)], [if([lor([iter([get(%i0/tier)], [u([v(database)]/tier`%i0, %#)])])], [pemit(%#, [ansi([switch([get(##/urgency)], 1, hg, 2, hy, 3, hr, n)], [printf($3^s $6-s $12-s $25-s $6-s $12-s $8s, [after([name(##)], %b)], [get(##/category)], [name([get(##/requester)])], [get(##/JName)], [if([hasattr(##/started)], [timefmt($02M/$02D, [get(##/started)])], --------)], [if([hasattr(##, handler)], [name([get(##/handler)])], -----)], [get(##/status)])])])])])])}};@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]}};@pemit %#=[error()]
+
+&CMD`VIEW-JOB Rockpath's Jobs System=$+job *:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [u([v(database)]/fn`showjob, %qj)]}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid number.};@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]}};@pemit %#=[error()]
+
+@@ B16: removed revwords() from reorder
+&CMD`REORDER Rockpath's Jobs System=$+jobs/reorder:@skip/ifelse [strmatch(%#, [owner(me)])]={@cemit staff={[u([v(database)]/fn`prompt, jobs)] The jobs were reordered.};@eval [set([v(database)], count:1)][iter([lcon([v(database)]/object)], [name(##, Job [get([v(database)]/count)])][set([v(database)], count:[inc([get([v(database)]/count)])])])][pemit(%#, [u([v(database)]/fn`prompt, jobs)] You have reordered all the jobs!)]}, @pemit %#=[error()]
+
+&CMD`URGENT Rockpath's Jobs System=$+job/urgency *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [u([v(database)]/fn`urgent,%qj,%1)]}, @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You must specify a valid Job.};@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]}};@pemit %#=[error()]
+
+@@ SR4: save category+requester before fn call (fn destroys job); trigger hook after
+&CMD`COMPLETE Rockpath's Jobs System=$+job/complete *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [setq(c,[get(%qj/category)])][setq(r,[get(%qj/requester)])][u([v(database)]/fn`complete-job, %qj, %1)]; @trigger me/HOOK_ON_COMPLETE=%qc,%qr,%1}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.}; @pemit %#=[error()]
+
+@@ SR4: save category+requester before fn call (fn destroys job); trigger hook after
+&CMD`APPROVE Rockpath's Jobs System=$+job/approve *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [setq(c,[get(%qj/category)])][setq(r,[get(%qj/requester)])][u([v(database)]/fn`approve-job, %qj, %1)]; @trigger me/HOOK_ON_APPROVE=%qc,%qr,%1}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ SR4: save category+requester before fn call (fn destroys job); trigger hook after
+&CMD`DENY Rockpath's Jobs System=$+job/deny *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [setq(c,[get(%qj/category)])][setq(r,[get(%qj/requester)])][u([v(database)]/fn`deny-job, %qj, %1)]; @trigger me/HOOK_ON_DENY=%qc,%qr,%1}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+&CMD`DELETE Rockpath's Jobs System=$+job/delete *:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [u([v(database)]/fn`del-job, %qj)]}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ SR4: trigger HOOK_ON_COMMENT after comment appended (job still exists at this point)
+&CMD`COMMENT Rockpath's Jobs System=$+job/comment *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(J, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qJ/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [set(%qJ, desc:[strcat([get(%qJ/desc)], %r%r[name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)])][mailsend([listdiff([get(%qJ/requester)] [if([t([get(%qJ/handler)])], [get(%qJ/handler)])], %#)], [name(%qJ)] %([get(%qJ/jname)]%), [name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)]; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You have commented on [name(%qJ)].; @trigger me/HOOK_ON_COMMENT=%qJ,[get(%qJ/category)],%#,%1}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+&CMD`CLAIM Rockpath's Jobs System=$+job/claim *:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [set(%qj, handler:%#)];@pemit %#=[u([v(database)]/fn`prompt, jobs)] You have claimed [name(%qj)].; @pemit/list [listdiff([iter([get(%qj/tier)], [u([v(database)]/tier-grab`##)])], %#)]=[u([v(database)]/fn`prompt, jobs)] [cname(%#)] has claimed [name(%qj)].}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ B2: register fix + mailsend() for RhostMUSH
+&CMD`ASSIGN Rockpath's Jobs System=$+job/assign *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@break [and([t([setr(0, [pmatch(%1)])])], [u([v(database)]/bool`is-staff, %q0)])]={@break [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %q0)])])])]={@eval [set(%qj, handler:%q0)][mailsend(%q0, Assignment: [name(%qj)], [cname(%#)] has assigned you to handle [name(%qj)].)]; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You have set [name(%qj)]'s Handler to [cname(%q0)].}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] [cname(%q0)] cannot access that Job. Please set the job to the appropriate Tier first.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Pick a valid Staff Member}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+&CMD`RENAME Rockpath's Jobs System=$+job/rename *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [set(%qj, JName:%1)];@pemit %#=[u([v(database)]/fn`prompt, Jobs)] You have set [name(%qj)]'s Job Name to '%1'.}, @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ B5: @assert -> @break; B16: removed revwords()
+&CMD`MYJOBS Rockpath's Jobs System=$+jobs/mine:@break [u([v(database)]/bool`is-staff)]={@pemit %#=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, [mudname()] Jobs)] >)]%r[ansi(c, [printf($3^s $6-s $12-s $25-s $6-s $12-s $8s, #, Type, Requester, Job Title, Start, Handler, Status)])]%r[repeat(-, 78)]; @eval [iter([lcon([v(database)]/object)], [ifelse([and([hasattr(##, handler)], [strmatch(%#, [get(##/handler)])])], [pemit(%#, [ansi([switch([get(##/urgency)], 1, hg, 2, hy, 3, hr, n)], [printf($3^s $6-s $12-s $25-s $6-s $12-s $8s, [after([name(##)], %b)], [get(##/category)], [name([get(##/requester)])], [get(##/JName)], [if([hasattr(##/started)], [timefmt($02M/$02D, [get(##/started)])], --------)], [if([hasattr(##, handler)], [name([get(##/handler)])], -----)], [get(##/status)])])])])])]; @pemit %#=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]};@pemit %#=[error()]
+
+&CMD`CATEGORIZE Rockpath's Jobs System=$+job/cat *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@break [t([match([u([v(database)]/list`categories)], %1)])]={@eval [set(%qj, category:[ucstr(%1)])][pemit(%#, [u([v(database)]/fn`prompt, jobs)] You have changed the category of [name(%qj)] to [ucstr(%1)].)]}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Please choose a proper category: [elist([get([v(database)]/list`categories)],or,,,,[ansi(y, %0)])]}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ B6: was referenced in help but had no handler
+&CMD`STATUS Rockpath's Jobs System=$+job/status *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@eval [u([v(database)]/fn`status, %qj, %1)]}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ I13: filter by category
+&CMD`FILTERCAT Rockpath's Jobs System=$+jobs/cat *:@break [u([v(database)]/bool`is-staff)]={@break [t([match([get([v(database)]/list`categories)], ucstr(%0))])]={@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, [mudname()] Jobs: [ucstr(%0)])] >)]%r[ansi(c, [printf($3^s $6-s $12-s $25-s $6-s $12-s $8^s, #, Type, Requester, Job Title, Start, Handler, Status)])]%r[repeat(-, 78)]};@skip/ifelse [t([lcon([v(database)]/object)])]={@eval [iter([lcon([v(database)]/object)], [if([and([strmatch([get(##/category)], ucstr(%0))], [lor([iter([get(%i0/tier)], [u([v(database)]/tier`%i0, %#)])])])], [pemit(%#, [ansi([switch([get(##/urgency)], 1, hg, 2, hy, 3, hr, n)], [printf($3^s $6-s $12-s $25-s $6-s $12-s $8s, [after([name(##)], %b)], [get(##/category)], [name([get(##/requester)])], [get(##/JName)], [if([hasattr(##/started)], [timefmt($02M/$02D, [get(##/started)])], --------)], [if([hasattr(##, handler)], [name([get(##/handler)])], -----)], [get(##/status)])])])])])])}};@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]}}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].};@pemit %#=[error()]
+
+&REQ-HELP Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Request System Help)] >)]%r[u([v(database)]/fn`formathelp,{+request - Start going through a +request.%r+request/create <Category>/<Topic>=<Contents> - Create a new request. The categories are: [elist([get([v(database)]/list`categories)],or,,,,[ansi(y, %0)])]%r+requests - Look at all the requests you've made.%r+request <#> - Look at the details of a request.%r+request/comment <#>=<comment> - Comment on a request..%r+request/cancel <#> - Cancel one of your requests.})]%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&CMD`REQ-ADD Rockpath's Jobs System=$+request/create */*=*:@break [t([match([get([v(database)]/list`categories)], %0)])]={@eval [u([v(database)]/fn`create-job, %0, %1, %2)];@pemit %#=[u([v(database)]/fn`prompt, req)] You have created a new Request under the [ansi(y, [ucstr(%0)])] category.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].
+
+@@ B16: removed revwords() from request list
+&CMD`VIEW-ALL-REQ Rockpath's Jobs System=$+requests:@pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, [mudname()] Jobs)] >)]%r[ansi(c, [printf($7^s $8-s $25-s $8-s $15-s $8^s, Req #, Category, Request Title, Started, Handler, Status)])]%r[repeat(-, 78)]}; @pemit %#={[iter([lcon([v(database)]/object)], [if([strmatch(%#, [get(##/requester)])], [pemit(%#, [printf($7^s $8-s $25-s $8-s $15-s $8^s, [edit([name(##)], Job, Req)], [get(##/category)], [get(##/JName)], [if([hasattr(##/started)], [timefmt($02M/$02D/$y, [get(##/started)])], --------)], [if([hasattr(##, handler)], [name([get(##/handler)])], -----)], [ansi([switch([get(##/urgency)], 1, hg, 2, hy, 3, hr, n)], [get(##/status)])])])])])]}; @pemit %#={[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Jobs)] >)]}
+
+&CMD`VIEW-REQ Rockpath's Jobs System=$+request *:@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%q0/requester)])]={@eval [u([v(database)]/fn`showjob, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, Req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Invalid Request.
+
+@@ B10: validate number, then job existence, then ownership
+&CMD`REQ-COMMENT Rockpath's Jobs System=$+request/comment *=*:@skip/ifelse [isint(%0)]={@skip/ifelse [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%qj/requester)])]={@eval [set(%qj, desc:[strcat([get(%qj/desc)], %r%r[name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)])];@pemit %#=[u([v(database)]/fn`prompt, req)] You have commented on [edit([name(%qj)], Job, Request)].};@pemit %#=[u([v(database)]/fn`prompt, req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, req)] No such request.}, @pemit %#=[u([v(database)]/fn`prompt, req)] Request must be a number.
+
+&CMD`CANCEL Rockpath's Jobs System=$+request/cancel *:@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch([get(%q0/requester)], %#)]={@eval [u([v(database)]/fn`cancel-request, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, req)] Please choose one of your own requests.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Please choose a valid +Request.
+
+@@ B3: %q8/%q9 positional registers
+&CMD`TIER Rockpath's Jobs System=$+job/tier *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@break [t([land([iter(%1, [if([strmatch(##, !*)], [hasattr([v(database)], tier`[after(##, !)])], [hasattr([v(database)], tier`##)])])])])]={@eval [setq(8,)][setq(9,)][iter(ucstr(%1), if(strmatch(##, !*), [setq(8, [trim([%q8] [after(##, !)])])], [setq(9, [trim([%q9] ##)])]))][set(%qj, tier:[setunion([setdiff([get(%qj/tier)], [%q8])], [%q9])])];@pemit %#=[u([v(database)]/fn`prompt, jobs)] You have set the tier of [name(%qj)] to '[get(%qj/tier)]'.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Please choose a valid tier: [elist([lattr([v(database)]/tier`*)],,,,,[ansi(hy, [after(%0, `)])])].}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+&CMD`HELP Rockpath's Jobs System=$+jobs/help:@skip/ifelse [u([v(database)]/bool`is-staff)]={[pemit(%#, [u(desc)])]}, [pemit(%#, [error()])]
+
+&CMD`REQ-HELP Rockpath's Jobs System=$+request/help:@eval [pemit(%#, [u(me/req-help)])]
+
+@set Rockpath's Jobs System=INHERIT SIDEFX
+
+@@ B4: removed @toggle PENN_MAIL — not valid in RhostMUSH; mailsend() used directly
+
+# ---------------------------------------------------------------------------
+# Job Database
+# ---------------------------------------------------------------------------
+
+&COUNT Rockpath's Job Database=1
+
+&FN`GET-JOB Rockpath's Job Database=[num(Job %0)]
+
+@@ B8: get(%0/desc) not get(%0/describe)
+&FN`SHOWJOB Rockpath's Job Database=[pemit(%#, [printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, [name(%0)])] >)])][pemit(%#, [printf($50-s $25-s, [ansi(hc, Job Title)]: [get(%0/jname)], [ansi(hc, Requester)]: [name([get(%0/requester)])])]%r[printf($25-s $25-s $25-s, [ansi(hc, Category)]: [get(%0/category)],, [ansi(hc, Status)]: [switch([get(%0/urgency)], 1, Green, 2, Yellow, 3, Red)] %([get(%0/status)]%))]%r[printf($50-s $25-s, [ansi(hc, Created)]: [createtime(%0)], [ansi(hc, Handler)]: [if([hasattr(%0, handler)], [name([get(%0/handler)])], -----)])])][pemit(%#, [repeat([ansi(hb, -)], 78)])][pemit(%#, [get(%0/desc)])][pemit(%#, [printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Job)] >)])]
+
+&FN`MAIL Rockpath's Job Database=@trigger tr`mail=%0
+
+@Startup Rockpath's Job Database=@trigger me/tr`urgency
+
+&TR`URGENCY Rockpath's Job Database=@wait 1={th [setq(z, [secs()])][iter([lcon(me/object)], [setq(y, [sub(%qz, [get(##/started)])])][switch(1, [!hasattr(##/started)], [set(##, urgency:4)], [eq([get(##/urgency)], 3)],, [eq([get(##/urgency)], 4)], , [lte(604800, %qy)], [set(##, urgency:3)], [lte(432000, %qy)], [set(##, urgency:2)])])]}
+
+&REQ-HELP Rockpath's Job Database=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Request System Help)] >)]%r[u([v(database)]/fn`formathelp, {+request/create Category/Topic=Contents - Create a new request.%r+requests - Look at all the requests you've made.%r+request <#> - Look at the details of a request.%r+request/comment <#>=<comment> - Comment on a request. This is simply appended to the request description.})]%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+@@ SR4: added KARMA and RUN categories
+&LIST`CATEGORIES Rockpath's Job Database=ADMIN APP BUILD CG CODE FORUM BUG PITCH TYPO PLOT RUN THEME QUERY KARMA NONE
+
+@@ B8: all mail fns use get(%0/desc) not get(%0/describe)
+&FN`DEL-JOB Rockpath's Job Database=[mailsend([get(%0/requester)], Del: [name(%0)], [cname(%#)] has deleted your request. A copy has been attached.%r%r[get(%0/desc)])][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have deleted [ansi(hy, [name(%0)])].)][destroy(%0)]
+
+@@ B8: %q0 -> %0 in subject line
+&FN`APPROVE-JOB Rockpath's Job Database=[mailsend([get(%0/requester)], App: [name(%0)],[cname(%#)] has approved your request. A copy has been attached.%r%r[get(%0/desc)]%r[repeat(-, 78)]%rComments from [cname(%#)]: %1)][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have approved [ansi(hy, [name(%0)])].)][destroy(%0)]
+
+&FN`DENY-JOB Rockpath's Job Database=[mailsend([get(%0/requester)], Den: [name(%0)],[cname(%#)] has denied your request. A copy has been attached.%r%r[get(%0/desc)]%r[repeat(-, 78)]%rComments from [cname(%#)]: %1)][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have denied [ansi(hy, [name(%0)])].)][destroy(%0)]
+
+&FN`COMPLETE-JOB Rockpath's Job Database=[mailsend([get(%0/requester)], Com: [name(%0)],[cname(%#)] has completed your request. A copy has been attached.%r%r[get(%0/desc)]%r[repeat(-, 78)]%rComments from [cname(%#)]: %1)][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have completed [ansi(hy, [name(%0)])])][destroy(%0)]
+
+&FN`STATUS Rockpath's Job Database=[set(%0, status:[switch(%1, new, NEW, underway, UNWY, done, DONE, complete, DONE, 50, 1/2 Done, 25, 1/4 Done, 75, 3/4 Done, 100, DONE, on hold, HOLD, hold, HOLD, ---)])][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have set [name(%0)]'s status as '[get(%0/status)]'.)]
+
+@@ B1: removed unmatched trailing )]
+&FN`URGENT Rockpath's Job Database=[set(%0, urgency:[setr(3, [switch(%1, 1, 1, 2, 2, 3, 3, green, 1, yellow, 2, red, 3, 4)])])][pemit(%#, [u([v(database)]/fn`prompt, Jobs)] You have set [name(%0)]'s urgency as 'Level %q3'.)]
+
+&FN`CANCEL-REQUEST Rockpath's Job Database=[mailsend([get(%0/requester)], Canceled: [name(%0)], You have canceled your request. A copy has been attached.%r%r[get(%0/desc)])][pemit([listunion([iter([get(%0/tier)], [u(tier-grab`##)])], )], [u([v(database)]/fn`prompt, Jobs)] [ansi(m, %N)] (%#) has canceled [ansi(hy, [name(%0)])].)][destroy(%0)]
+
+&fn`formathelp Rockpath's Job Database=[regeditalli(%0,(%\+((%\w)+(/(%\w)+)?)),[ansi(hg,$1)],(<(.*?)>),[ansi(hr,$1)],(=),[ansi(hc,$1)], %{,,%},)]
+
+&BOOL`IS-STAFF Rockpath's Job Database=[lor([iter([lattr(me/tier`*)], [u(##, %#)])])]
+
+@@ B8: store body in desc; SR4: %3=requester override (falls back to %# if omitted)
+&FN`CREATE-JOB Rockpath's Job Database=[setq(0, [create(Job [v(count)])])][set(me, count:[inc([v(count)])])][set(%q0, requester:[if(%3,%3,%#)])][tel(%q0, me)][set(%q0, JName:%1)][set(%q0, Category:[ucstr(%0)])][set(%q0, desc:%2)][set(%q0, status:NEW)][set(%q0, Urgency:1)][set(%q0, started:[secs()])][set(%q0, tier:[u(dat`initial-tier)])][pemit([listunion([iter([get(%q0/tier)], [u(tier-grab`##)])],)], [u([v(database)]/fn`prompt, Jobs)] [ansi(c, %N)] has added [name(%q0)] under the [ansi(y, [ucstr(%0)])] topic.)]
+
+&DAT`INITIAL-TIER Rockpath's Job Database=1 [switch([get(%q0/category)], BUILD, BUILDER)]
+
+&TIER-GRAB`1 Rockpath's Job Database=search(eplayer=u(tier`1, ##))
+&TIER`1 Rockpath's Job Database=[gte([bittype(%0)], 5)]
+&TIER-GRAB`BUILDER Rockpath's Job Database=search(eplayer=u(tier`builder, ##))
+&TIER`BUILDER Rockpath's Job Database=[hasflag(%0, architect)]
+
+@set Rockpath's Job Database=INHERIT SIDEFX
+
+&CREDIT Rockpath's Job Database=Inspiration taken from Anomaly Jobs. This setup-file was based off of Myrddin's BBoard Setup File. The code above is all my own doing.
+
+@@ B7: case-insensitive; req and default (SYS) cases
+&FN`PROMPT Rockpath's Job Database=[switch(lcstr(%0), jobs, [ansi(hc, JOBS)], req, [ansi(hg, REQ)], game, [ansi(hm, GAME)], [ansi(hw, SYS)])]:
+
+&Last_Update Rockpath's Job Database=Mar 28, 2026
+&version Rockpath's Job Database=2.1.3
+
+@set Rockpath's Job Database=INHERIT SIDEFX
+
+@set me=!quiet
+
+# ---------------------------------------------------------------------------
+# SR4 hook stubs — outbound event notifications
+# Set at SR4 system install time; empty = no-op
+# ---------------------------------------------------------------------------
+
+@@ HOOK_ON_COMPLETE/APPROVE/DENY  %0=category  %1=requester-dbref  %2=staff-comment
+@@ HOOK_ON_COMMENT                 %0=job-dbref %1=category %2=commenter-dbref %3=comment-text
+&HOOK_ON_COMPLETE Rockpath's Jobs System=
+&HOOK_ON_APPROVE  Rockpath's Jobs System=
+&HOOK_ON_DENY     Rockpath's Jobs System=
+&HOOK_ON_COMMENT  Rockpath's Jobs System=
+
+# ---------------------------------------------------------------------------
+# Help system — per-topic +jobs/help dispatch
+# ---------------------------------------------------------------------------
+
+@@ Upgrade +jobs/help to dispatch to per-topic attributes
+&CMD`HELP Rockpath's Jobs System=$+jobs/help*:@skip/ifelse [u([v(database)]/bool`is-staff)]={@skip/ifelse [t(trim(%0))]={@skip/ifelse [hasattr(me, help`[lcstr(edit(trim(%0), /, -))])]={@eval [pemit(%#, [u(me/help`[lcstr(edit(trim(%0), /, -))])])]};@pemit %#=[u([v(database)]/fn`prompt, jobs)] No help for '[trim(%0)]'. Try +jobs/help for the index.};@eval [pemit(%#, [u(desc)])]};@pemit %#=[error()]
+
+@desc Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Rockpath's Jobs System Help)] >)]%r[ansi(hc, Job management  )] -- type [ansi(hg, +jobs/help <topic>)] for details%r[repeat(-, 78)]%r  [ansi(hy, create)]      Submit a new job ticket%r  [ansi(hy, view)]         View the job list or a single job%r  [ansi(hy, status)]       Set a job's progress (new/underway/hold/done/%)%r  [ansi(hy, urgency)]      Set a job's priority level%r  [ansi(hy, comment)]      Append a comment and notify requester%r  [ansi(hy, claim)]        Take a job as your own%r  [ansi(hy, assign)]       Hand a job off to another staff member%r  [ansi(hy, approve)]      Approve and close a job%r  [ansi(hy, deny)]         Deny and close a job%r  [ansi(hy, complete)]     Mark done and close a job%r  [ansi(hy, delete)]       Delete without a ruling%r  [ansi(hy, rename)]       Change a job's title%r  [ansi(hy, cat)]          Move a job to a different category%r  [ansi(hy, tier)]         Set which tiers can see a job%r  [ansi(hy, mine)]         List jobs assigned to you%r  [ansi(hy, filter)]       Filter the job list by category%r  [ansi(hy, reorder)]      Compress job numbering%r  [ansi(hy, tiers)]        Overview of the tier system%r  [ansi(hy, urgency-system)]  How urgency auto-escalation works%r[repeat(-, 78)]%r[ansi(hc, Player requests)] -- type [ansi(hg, +request/help)] for details%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`CREATE Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/create)] >)]%r%r  [ansi(hg, +job/create)] [ansi(hr, <Category>/<Topic>=<Contents>)]%r%r  Submit a new job ticket. All staff with access to the job's tier%r  are notified immediately. New jobs start at status [ansi(hc, NEW)] and%r  urgency [ansi(hg, Green (1))].%r%r  [ansi(hc, <Category>)]  Must exactly match one of the valid categories (case-%r              insensitive). Invalid category shows the full list.%r  [ansi(hc, <Topic>)]     Short title for the job (becomes the job name).%r  [ansi(hc, <Contents>)]  Full description of the request.%r%r  [ansi(hy, Valid categories:)]%r    ADMIN   APP    BUILD   CG    CODE   FORUM   BUG%r    KARMA   PITCH  PLOT   RUN    THEME  QUERY  TYPO   NONE%r%r  [ansi(hy, Tier note:)] BUILD jobs are visible to both Tier 1 (Wizards) and%r  BUILDER tier (Architects). All other categories go to Tier 1 only.%r  Use [ansi(hg, +job/tier)] to change tier access after creation.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/create APP/Playername=Please review my application.)]%r    [ansi(hg, +job/create BUG/Broken exit=The north exit in #123 goes nowhere.)]%r    [ansi(hg, +job/create BUILD/Park expansion=Request to add three new rooms.)]%r%r  [ansi(hy, See also:)] +jobs/help status, +jobs/help urgency, +jobs/help tier%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`VIEW Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Viewing Jobs)] >)]%r%r  [ansi(hg, +jobs)]%r  List all open jobs that your tier can access. Each row shows:%r    [ansi(hc, #)]          Job number%r    [ansi(hc, Type)]       Category%r    [ansi(hc, Requester)]  Who submitted the job%r    [ansi(hc, Job Title)]  Job name%r    [ansi(hc, Start)]      Creation date (MM/DD)%r    [ansi(hc, Handler)]    Assigned staff member (---- if unclaimed)%r    [ansi(hc, Status)]     Current progress%r%r  Row color reflects urgency:%r    [ansi(hg, Green)]   Level 1 -- low priority%r    [ansi(hy, Yellow)]  Level 2 -- moderate priority%r    [ansi(hr, Red)]     Level 3 -- high priority%r    Normal      Level 4 -- unstarted / no timestamp%r%r  [ansi(hg, +job <#>)]%r  View full details of a single job. Shows title, requester,%r  category, status, urgency color, created date, handler, and%r  the full job body including all appended comments.%r%r  You must have tier access to the job to view it.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +jobs)]%r    [ansi(hg, +job 5)]%r%r  [ansi(hy, See also:)] +jobs/help mine, +jobs/help filter%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`STATUS Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/status)] >)]%r%r  [ansi(hg, +job/status)] [ansi(hr, <#>=<value>)]%r%r  Set the progress status of a job. You must have tier access to%r  the job. The requester is not notified; use [ansi(hg, +job/comment)] to%r  notify them of a status change.%r%r  [ansi(hy, Valid values:)]%r    [ansi(hc, new)]            Sets status to [ansi(hw, NEW)]%r    [ansi(hc, underway)]       Sets status to [ansi(hw, UNWY)]%r    [ansi(hc, hold)]           Sets status to [ansi(hw, HOLD)]%r    [ansi(hc, done)]           Sets status to [ansi(hw, DONE)]%r    [ansi(hc, complete)]       Sets status to [ansi(hw, DONE)]%r    [ansi(hc, 25)]             Sets status to [ansi(hw, 1/4 Done)]%r    [ansi(hc, 50)]             Sets status to [ansi(hw, 1/2 Done)]%r    [ansi(hc, 75)]             Sets status to [ansi(hw, 3/4 Done)]%r    [ansi(hc, 100)]            Sets status to [ansi(hw, DONE)]%r    [ansi(hc, anything else)]  Sets status to [ansi(hw, ---)]%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/status 3=underway)]%r    [ansi(hg, +job/status 7=50)]%r    [ansi(hg, +job/status 12=hold)]%r%r  [ansi(hy, See also:)] +jobs/help approve, +jobs/help deny, +jobs/help complete%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`URGENCY Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/urgency)] >)]%r%r  [ansi(hg, +job/urgency)] [ansi(hr, <#>=<level>)]%r%r  Set the urgency (priority) of a job. Urgency controls the row%r  color in [ansi(hg, +jobs)] and drives the auto-escalation system.%r%r  [ansi(hy, Valid levels:)]%r    [ansi(hg, 1)]  or  [ansi(hg, green)]   Low priority        (row shown in green)%r    [ansi(hy, 2)]  or  [ansi(hy, yellow)]  Moderate priority   (row shown in yellow)%r    [ansi(hr, 3)]  or  [ansi(hr, red)]     High priority       (row shown in red)%r    [ansi(hw, 4)]              Unstarted / no age  (normal color)%r%r  [ansi(hy, Note:)] New jobs start at Level 1 (green). The auto-escalation%r  system will raise urgency over time based on job age. See%r  [ansi(hg, +jobs/help urgency-system)] for full details.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/urgency 5=red)]%r    [ansi(hg, +job/urgency 5=2)]%r    [ansi(hg, +job/urgency 5=1)]%r%r  [ansi(hy, See also:)] +jobs/help urgency-system, +jobs/help view%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`URGENCY-SYSTEM Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Urgency Auto-Escalation)] >)]%r%r  Jobs automatically escalate in urgency based on their age.%r  The escalation trigger runs continuously in the background.%r%r  [ansi(hy, Escalation rules (checked in order):)]%r    1. Job has no creation timestamp      --> Urgency 4 (unstarted)%r    2. Job is already Urgency 3 or 4      --> No change%r    3. Job is [ansi(hr, 7+ days old)] (604800 sec)         --> Urgency 3 (red)%r    4. Job is [ansi(hy, 5+ days old)] (432000 sec)         --> Urgency 2 (yellow)%r    5. Otherwise                          --> No change%r%r  [ansi(hy, Implications:)]%r  - All new jobs start at Urgency 1 (green).%r  - After 5 days without resolution, a job turns yellow.%r  - After 7 days, it turns red and stays red automatically.%r  - Manually setting Urgency 3 or 4 freezes auto-escalation%r    for that job -- the trigger skips those levels.%r  - Setting a stale job back to Urgency 1 or 2 will be%r    overridden by the trigger on its next cycle.%r%r  [ansi(hy, See also:)] +jobs/help urgency%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`COMMENT Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/comment)] >)]%r%r  [ansi(hg, +job/comment)] [ansi(hr, <#>=<comment>)]%r%r  Append a comment to a job. The comment is stamped with your name%r  and the current date and time, then appended to the job body.%r%r  The requester and the current handler (if one is assigned and is%r  not you) are each sent a mail notification containing your comment.%r%r  You must have tier access to the job to comment on it.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/comment 3=Working on this now, expect a response by tomorrow.)]%r    [ansi(hg, +job/comment 7=Waiting on builder to finish the room layout.)]%r%r  [ansi(hy, See also:)] +jobs/help view, +jobs/help status%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`CLAIM Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/claim)] >)]%r%r  [ansi(hg, +job/claim)] [ansi(hr, <#>)]%r%r  Claim a job as your own handler. Your name will appear in the%r  [ansi(hc, Handler)] column of [ansi(hg, +jobs)], and you will receive mail%r  notifications when comments are added.%r%r  All other staff with tier access to the job are notified via%r  [ansi(hc, pemit)] that you have claimed it.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Note:)] Claiming does not lock others out. Any staff member%r  with tier access can still comment, reassign, or close the job.%r  Use [ansi(hg, +job/assign)] to hand it off to someone else.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/claim 4)]%r%r  [ansi(hy, See also:)] +jobs/help assign, +jobs/help mine%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`ASSIGN Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/assign)] >)]%r%r  [ansi(hg, +job/assign)] [ansi(hr, <#>=<Staff Member>)]%r%r  Assign a job to another staff member. The target must be a valid%r  staff member (passes BOOL`IS-STAFF) and must already have tier%r  access to the job. The assigned staff member is sent a mail%r  notification.%r%r  You must have tier access to the job to assign it.%r%r  [ansi(hy, Error conditions:)]%r    - Target is not a valid staff member%r    - Target does not have tier access to the job%r      (fix with [ansi(hg, +job/tier)] first, then assign)%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/assign 6=Staffname)]%r%r  [ansi(hy, See also:)] +jobs/help claim, +jobs/help tier, +jobs/help mine%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`APPROVE Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/approve)] >)]%r%r  [ansi(hg, +job/approve)] [ansi(hr, <#>=<comment>)]%r%r  Approve a job and close it. The requester is sent a mail message%r  containing the full job body and your comment, then the job%r  object is permanently destroyed.%r%r  The [ansi(hr, =)] sign is required even if you have no comment to add.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Mail subject:)] [ansi(hw, App: <job name>)]%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/approve 2=Your application looks great, welcome aboard!)]%r    [ansi(hg, +job/approve 2=)]%r%r  [ansi(hy, See also:)] +jobs/help deny, +jobs/help complete, +jobs/help delete%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`DENY Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/deny)] >)]%r%r  [ansi(hg, +job/deny)] [ansi(hr, <#>=<comment>)]%r%r  Deny a job and close it. The requester is sent a mail message%r  containing the full job body and your comment, then the job%r  object is permanently destroyed.%r%r  The [ansi(hr, =)] sign is required even if you have no comment to add.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Mail subject:)] [ansi(hw, Den: <job name>)]%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/deny 8=Sorry, we are not accepting this type of request at this time.)]%r    [ansi(hg, +job/deny 8=]]%r%r  [ansi(hy, See also:)] +jobs/help approve, +jobs/help complete, +jobs/help delete%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`COMPLETE Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/complete)] >)]%r%r  [ansi(hg, +job/complete)] [ansi(hr, <#>=<comment>)]%r%r  Mark a job as complete and close it. The requester is sent a mail%r  message containing the full job body and your comment, then the%r  job object is permanently destroyed.%r%r  Use this for tasks that have been finished rather than formally%r  approved or denied (e.g., code work, building, fixes).%r%r  The [ansi(hr, =)] sign is required even if you have no comment to add.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Mail subject:)] [ansi(hw, Com: <job name>)]%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/complete 11=The typo has been corrected. Thank you for the report!)]%r    [ansi(hg, +job/complete 11=]]%r%r  [ansi(hy, See also:)] +jobs/help approve, +jobs/help deny, +jobs/help delete%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`DELETE Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/delete)] >)]%r%r  [ansi(hg, +job/delete)] [ansi(hr, <#>)]%r%r  Delete a job without issuing an approval, denial, or completion.%r  The requester is mailed a full copy of the job body, then the%r  job object is permanently destroyed.%r%r  This is a neutral administrative action. Use it to clean up%r  duplicate tickets, test jobs, or entries submitted in error.%r  For decisions on actual requests, prefer [ansi(hg, +job/approve)] or%r  [ansi(hg, +job/deny)].%r%r  You must have tier access to the job.%r%r  [ansi(hy, Mail subject:)] [ansi(hw, Del: <job name>)]%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/delete 15)]%r%r  [ansi(hy, See also:)] +jobs/help approve, +jobs/help deny, +jobs/help complete%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`RENAME Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/rename)] >)]%r%r  [ansi(hg, +job/rename)] [ansi(hr, <#>=<New Title>)]%r%r  Change the title (JName) of a job. The job [ansi(hr, number)] does not%r  change -- only the descriptive name is updated. Use this to%r  correct typos in the original subject line or to better reflect%r  the scope of a job that has evolved.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/rename 9=Application - Playername - Warrior)]%r    [ansi(hg, +job/rename 9=BUG - Missing exit between Park and River District]]%r%r  [ansi(hy, See also:)] +jobs/help cat, +jobs/help view%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`CAT Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/cat)] >)]%r%r  [ansi(hg, +job/cat)] [ansi(hr, <#>=<Category>)]%r%r  Move a job to a different category. The category must be one of%r  the valid categories (case-insensitive).%r%r  [ansi(hr, Tier access is NOT automatically updated.)] If you move a job to%r  BUILD, BUILDER-tier staff will not gain access automatically.%r  Use [ansi(hg, +job/tier)] after moving to adjust access.%r%r  You must have tier access to the job.%r%r  [ansi(hy, Valid categories:)]%r    ADMIN   APP    BUILD   CG    CODE   FORUM   BUG%r    KARMA   PITCH  PLOT   RUN    THEME  QUERY  TYPO   NONE%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/cat 4=BUILD)]%r    [ansi(hg, +job/cat 4=CODE)]%r%r  [ansi(hy, See also:)] +jobs/help tier, +jobs/help rename%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`TIER Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +job/tier)] >)]%r%r  [ansi(hg, +job/tier)] [ansi(hr, <#>=[!]<Tier> [!]<Tier> ...)]%r%r  Add or remove tier access on a job. Multiple tiers can be set%r  in a single command, space-separated. Prefix a tier name with%r  [ansi(hr, !)] to remove it.%r%r  You must have tier access to the job to change its tiers.%r  [ansi(hr, Always leave at least one tier active.)] Removing all tiers makes%r  the job invisible to everyone.%r%r  [ansi(hy, Current tiers:)]%r    [ansi(hc, 1)]        Tier 1 -- Wizards and above (bittype >= 5)%r    [ansi(hc, BUILDER)]  Builder tier -- players with the Architect flag%r%r  [ansi(hy, Default tier assignment at creation:)]%r    BUILD category  --> Tiers: 1 BUILDER%r    All others      --> Tier: 1 only%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +job/tier 6=BUILDER)]          Add BUILDER access%r    [ansi(hg, +job/tier 6=!1)]               Remove Tier 1 access%r    [ansi(hg, +job/tier 6=BUILDER !1)]       Add BUILDER, remove Tier 1%r    [ansi(hg, +job/tier 6=1 BUILDER)]        Add both tiers%r%r  [ansi(hy, See also:)] +jobs/help tiers, +jobs/help assign, +jobs/help cat%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`TIERS Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Tier System Overview)] >)]%r%r  The tier system controls which staff members can see, comment%r  on, and manage each job. Every job carries a list of tier%r  names; a staff member can access the job if they qualify for%r  at least one of those tiers.%r%r  [ansi(hy, Built-in tiers:)]%r    [ansi(hc, 1)]        Any player with bittype >= 5 (Wizard level or higher).%r    [ansi(hc, BUILDER)]  Any player with the Architect flag set.%r%r  [ansi(hy, Adding custom tiers:)]%r  A new tier requires two attributes on Rockpath's Job Database:%r    [ansi(hc, TIER`<name>)]       -- evaluates to 1 if player qualifies%r    [ansi(hc, TIER-GRAB`<name>)]  -- returns a list of all qualifying players%r%r  Example (Storyteller tier for players with the ST flag):%r    [ansi(hg, &TIER`ST Rockpath's Job Database=[hasflag(%0, st]])]%r    [ansi(hg, &TIER-GRAB`ST Rockpath's Job Database=[search(eplayer=u(tier`st, ##))])]%r%r  [ansi(hy, See also:)] +jobs/help tier%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`MINE Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +jobs/mine)] >)]%r%r  [ansi(hg, +jobs/mine)]%r%r  List all open jobs that are currently assigned to you (i.e.,%r  where you are the Handler). Shows the same columns as [ansi(hg, +jobs)]%r  with the same urgency color coding.%r%r  Use this as a personal work queue. Jobs appear here after you%r  [ansi(hg, +job/claim)] them or another staff member uses [ansi(hg, +job/assign)] to%r  route them to you.%r%r  [ansi(hy, See also:)] +jobs/help claim, +jobs/help assign, +jobs/help view%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`FILTER Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +jobs/cat] >)]%r%r  [ansi(hg, +jobs/cat)] [ansi(hr, <Category>)]%r%r  Display only the jobs in a specific category that you have tier%r  access to. Category matching is case-insensitive. The output%r  format and urgency color coding are identical to [ansi(hg, +jobs)].%r%r  Useful when you want to focus on a particular area of work%r  without scrolling past unrelated tickets.%r%r  [ansi(hy, Valid categories:)]%r    ADMIN   APP    BUILD   CG    CODE   FORUM   BUG%r    KARMA   PITCH  PLOT   RUN    THEME  QUERY  TYPO   NONE%r%r  [ansi(hy, Examples:)]%r    [ansi(hg, +jobs/cat APP)]%r    [ansi(hg, +jobs/cat build)]%r%r  [ansi(hy, See also:)] +jobs/help view, +jobs/help cat%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&HELP`REORDER Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, +jobs/reorder)] >)]%r%r  [ansi(hg, +jobs/reorder)]%r%r  Renumber all open jobs sequentially starting from 1, then%r  reset the internal counter to match. Known as 'compress' in%r  some job systems.%r%r  Useful after a wave of closures leaves large gaps in the%r  numbering (e.g., jobs 1, 5, 9, 12 become jobs 1, 2, 3, 4).%r%r  [ansi(hr, Restricted:)] Only the owner of Rockpath's Jobs System can run%r  this command. Staff members assigned via tier access cannot.%r%r  All tier staff are notified via +cemit when the reorder%r  completes.%r%r  [ansi(hy, See also:)] +jobs/help view%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+&REQ-HELP Rockpath's Jobs System=[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, Request System Help)] >)]%r%r  The request system lets you submit questions or requests to staff.%r  You can view your own requests, add comments, and cancel them.%r  Staff are notified automatically when you submit or comment.%r%r[repeat(-, 78)]%r%r  [ansi(hg, +request/create)] [ansi(hr, <Category>/<Topic>=<Contents>)]%r    Submit a new request. Choose the category that best fits.%r    Valid categories:%r      ADMIN   APP    BUILD   CG    CODE   FORUM   BUG%r      KARMA   PITCH  PLOT   RUN    THEME  QUERY  TYPO   NONE%r%r    Examples:%r      [ansi(hg, +request/create APP/Myname=I would like to apply for a character.)]%r      [ansi(hg, +request/create TYPO/Park desc=The word 'there' is misspelled.)]%r%r  [ansi(hg, +requests)]%r    List all of your open requests. Shows request number, category,%r    title, date, handler, and current status.%r%r  [ansi(hg, +request <#>)]%r    View the full details of one of your requests, including any%r    staff comments that have been added.%r%r  [ansi(hg, +request/comment)] [ansi(hr, <#>=<comment>)]%r    Add a follow-up comment to one of your requests. The comment%r    is timestamped and appended to the request body.%r    You can only comment on your own requests.%r%r    Example:%r      [ansi(hg, +request/comment 3=Just checking in -- any update on this?)]%r%r  [ansi(hg, +request/cancel)] [ansi(hr, <#>)]%r    Cancel one of your own requests. You will receive a mail%r    confirmation with a copy of the request. Staff with access%r    to the job are notified. The request is then destroyed.%r%r    Example:%r      [ansi(hg, +request/cancel 3)]%r%r  [ansi(hg, +request/help)]%r    Display this help text.%r%r[printf($^78:[ansi(hb, -=)]:s, < [ansi(hw, End Help)] >)]
+
+# ---------------------------------------------------------------------------
+# Security patch — SAFE, use-lock, INHERIT removal, injection guards
+# Apply: C1 C2 H1 M1 M2 M-RJ-01 M-RJ-02
+# ---------------------------------------------------------------------------
+
+@@ M1: SAFE flag prevents accidental @destroy of both system objects
+@set Rockpath's Jobs System=safe
+@set Rockpath's Job Database=safe
+
+@@ M2: @lock/use on Job Database (INHERIT object must be wizard-only)
+@lock/use Rockpath's Job Database=haspower(me,Wizard)
+
+@@ INHERIT removal — Jobs System carries player-accessible $-commands (+request/*)
+@@ Removing INHERIT means injection runs at player privilege, not wizard.
+@@ Job Database retains INHERIT (fn`create-job, mailsend need wizard power).
+@set Rockpath's Jobs System=!inherit
+
+@@ H1: isnum() pre-guard on CMD`VIEW-REQ
+&CMD`VIEW-REQ Rockpath's Jobs System=$+request *:@break [isnum(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%q0/requester)])]={@eval [u([v(database)]/fn`showjob, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, Req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Invalid Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request must be a number.
+
+@@ H1: isnum() pre-guard on CMD`CANCEL
+&CMD`CANCEL Rockpath's Jobs System=$+request/cancel *:@break [isnum(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch([get(%q0/requester)], %#)]={@eval [u([v(database)]/fn`cancel-request, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, req)] Please choose one of your own requests.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Please choose a valid +Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request number must be a number.
+
+@@ C1: CMD`REQ-ADD — bracket-rejection on topic (%1) and body (%2)
+&CMD`REQ-ADD Rockpath's Jobs System=$+request/create */*=*:@break [t([match([get([v(database)]/list`categories)], %0)])]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the topic.}; @break [strmatch(%2, [edit(%2, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the body.}; @eval [u([v(database)]/fn`create-job, %0, %1, %2)];@pemit %#=[u([v(database)]/fn`prompt, req)] You have created a new Request under the [ansi(y, [ucstr(%0)])] category.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].
+
+@@ C2: CMD`REQ-COMMENT — bracket-rejection on comment body (%1)
+&CMD`REQ-COMMENT Rockpath's Jobs System=$+request/comment *=*:@skip/ifelse [isint(%0)]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Comments may not contain [ characters.}; @skip/ifelse [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%qj/requester)])]={@eval [set(%qj, desc:[strcat([get(%qj/desc)], %r%r[name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)])];@pemit %#=[u([v(database)]/fn`prompt, req)] You have commented on [edit([name(%qj)], Job, Request)].};@pemit %#=[u([v(database)]/fn`prompt, req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, req)] No such request.}, @pemit %#=[u([v(database)]/fn`prompt, req)] Request must be a number.
+
+@@ M-RJ-01: CMD`RENAME — bracket-rejection on new job name (%1)
+@@ Stored injection: brackets in JName re-evaluate in fn`showjob and mail subjects.
+&CMD`RENAME Rockpath's Jobs System=$+job/rename *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qj/tier)], [u([v(database)]/tier`##, %#)])])])]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, Jobs)] Job names may not contain [ characters.}; @eval [set(%qj, JName:%1)];@pemit %#=[u([v(database)]/fn`prompt, Jobs)] You have set [name(%qj)]'s Job Name to '%1'.}, @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You don't have permission to change that job.}; @pemit %#=[u([v(database)]/fn`prompt, Jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+@@ M-RJ-02: CMD`COMMENT (staff) — bracket-rejection on comment body (%1)
+@@ Stored injection: brackets appended to desc re-evaluate in fn`showjob.
+&CMD`COMMENT Rockpath's Jobs System=$+job/comment *=*:@break [u([v(database)]/bool`is-staff)]={@break [t([setr(J, [u([v(database)]/fn`get-job, %0)])])]={@skip/ifelse [t([lor([iter([get(%qJ/tier)], [u([v(database)]/tier`##, %#)])])])]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, jobs)] Comments may not contain [ characters.}; @eval [set(%qJ, desc:[strcat([get(%qJ/desc)], %r%r[name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)])][mailsend([listdiff([get(%qJ/requester)] [if([t([get(%qJ/handler)])], [get(%qJ/handler)])], %#)], [name(%qJ)] %([get(%qJ/jname)]%), [name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)]; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You have commented on [name(%qJ)].; @trigger me/HOOK_ON_COMMENT=%qJ,[get(%qJ/category)],%#,%1}, @pemit %#=[u([v(database)]/fn`prompt, jobs)] You don't have permission to look at that job.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] You must specify a valid Job.};@pemit %#=[error()]
+
+#!post-install
+@set me=!sidefx
+@wait 1=@pemit me=%rRockpath's Jobs System construction complete.%rIt is suggested that you create a Jobs_System character with Immortal permissions so that mails don't look like they come from a single staffer.%r[repeat(=,78)]
+#!end-post-install
