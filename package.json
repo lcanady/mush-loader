@@ -1,5 +1,5 @@
 {
-  "name": "@rhost/mush-loader",
+  "name": "@rhost/loader",
   "version": "1.0.0",
   "description": "Safe MUSHcode loader for RhostMUSH — CLI + in-game commands with optional AI vetting",
   "main": "dist/cli.js",
