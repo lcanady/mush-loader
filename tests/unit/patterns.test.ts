@@ -24,6 +24,55 @@ function stubFs() {
   mock.method(fs, 'writeFileSync', () => undefined);
 }
 
+describe('patterns.ts — YAML injection via tags (L-1)', () => {
+  afterEach(() => mock.restoreAll());
+
+  test('[L-1 RED] tag with newline injects extra YAML key into frontmatter', async () => {
+    const written: string[] = [];
+    mock.method(fs, 'existsSync', (p: string) => !p.endsWith('.md'));
+    mock.method(fs, 'mkdirSync',  () => undefined);
+    mock.method(fs, 'writeFileSync', (_p: string, content: string) => { written.push(content); });
+    mock.method(cp, 'execFileSync', (bin: string) => bin === 'gh' ? 'https://github.com/pr/1' : '');
+
+    await contributePattern({
+      name: 'safe-pkg',
+      description: 'desc',
+      code: '@create Foo',
+      vetResult: { verdict: 'pass', findings: [], summary: 'ok' },
+      tags: ['legit', 'evil\ninjected: value'],
+    });
+
+    assert.ok(written.length > 0, 'writeFileSync must have been called');
+    const content = written[0];
+    // The YAML frontmatter tags line must not contain a raw newline inside the value
+    const frontmatter = content.split('---')[1] ?? '';
+    assert.ok(
+      !frontmatter.includes('injected: value'),
+      'YAML injection: "injected: value" must not appear as a top-level key in frontmatter (RED)',
+    );
+  });
+
+  test('[L-1 GREEN] tags containing only alphanumerics/hyphens pass through', async () => {
+    const written: string[] = [];
+    mock.method(fs, 'existsSync', (p: string) => !p.endsWith('.md'));
+    mock.method(fs, 'mkdirSync',  () => undefined);
+    mock.method(fs, 'writeFileSync', (_p: string, content: string) => { written.push(content); });
+    mock.method(cp, 'execFileSync', (bin: string) => bin === 'gh' ? 'https://github.com/pr/1' : '');
+
+    await contributePattern({
+      name: 'safe-pkg',
+      description: 'desc',
+      code: '@create Foo',
+      vetResult: { verdict: 'pass', findings: [], summary: 'ok' },
+      tags: ['utility', 'social', 'admin-only'],
+    });
+
+    const content = written[0];
+    assert.ok(content.includes('utility'), 'valid tags must appear in output');
+    assert.ok(content.includes('admin-only'), 'hyphenated tags must be preserved');
+  });
+});
+
 describe('patterns.ts — shell safety (M1 / L2)', () => {
   afterEach(() => mock.restoreAll());
 

@@ -1,6 +1,6 @@
 {
   "name": "mush-loader",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Safe MUSHcode loader for RhostMUSH — CLI + in-game commands with optional AI vetting",
   "main": "dist/cli.js",
   "bin": {
@@ -14,7 +14,8 @@
     "test:commands": "tsx tests/commands.test.ts",
     "test:security": "tsx tests/security.test.ts",
     "test:help": "tsx tests/help-system.test.ts",
-    "test": "npm run test:unit && tsx tests/bootstrap.test.ts && tsx tests/commands.test.ts && tsx tests/security.test.ts && tsx tests/help-system.test.ts"
+    "test:rockjobs": "tsx tests/rockjobs.test.ts",
+    "test": "npm run test:unit && tsx tests/bootstrap.test.ts && tsx tests/commands.test.ts && tsx tests/security.test.ts && tsx tests/help-system.test.ts && tsx tests/rockjobs.test.ts"
   },
   "keywords": ["mush", "mushcode", "rhostmush", "softcode", "loader"],
   "author": "",

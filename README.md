@@ -2,7 +2,7 @@
 
 > Safe MUSHcode loader for RhostMUSH — CLI + in-game commands with optional AI vetting
 
-**Version:** 0.1.0  **Server:** RhostMUSH  **License:** MIT
+**Version:** 1.0.0  **Server:** RhostMUSH  **License:** MIT
 
 ![Coverage](https://img.shields.io/badge/coverage-99.69%25%20line%20%7C%2095.71%25%20branch-brightgreen)
 
@@ -309,6 +309,18 @@ disclosure policy.
 - [Usage guide](docs/usage.md) — detailed CLI and in-game usage
 - [AI providers](docs/ai-providers.md) — provider-specific configuration
 - [Contributing to the registry](docs/contributing.md) — how to publish packages
+
+---
+
+## Shell completion
+
+```bash
+# bash — add to ~/.bashrc
+source /path/to/mush-loader/completions/mush-loader.bash
+
+# zsh — copy to a directory on $fpath
+cp completions/mush-loader.zsh /usr/local/share/zsh/site-functions/_mush-loader
+```
 
 ---
 

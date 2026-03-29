@@ -243,4 +243,45 @@ describe('fetchPackage', () => {
       /Package download failed/,
     );
   });
+
+  // --- Security: M-1 SSRF — package URL must be validated before fetch ---
+
+  test('[M-1 RED] rejects file:// package URL without making a request', async () => {
+    let fetchCalled = false;
+    mock.method(globalThis, 'fetch', async () => { fetchCalled = true; return { ok: true, text: async () => '' }; });
+    await assert.rejects(
+      () => fetchPackage(entry({ url: 'file:///etc/passwd' })),
+      /package url/i,
+      'file:// URL should be rejected before fetch — currently passes through (RED)',
+    );
+    assert.equal(fetchCalled, false, 'fetch must not be called for an invalid URL scheme');
+  });
+
+  test('[M-1 RED] rejects ftp:// package URL without making a request', async () => {
+    let fetchCalled = false;
+    mock.method(globalThis, 'fetch', async () => { fetchCalled = true; return { ok: true, text: async () => '' }; });
+    await assert.rejects(
+      () => fetchPackage(entry({ url: 'ftp://internal.host/evil' })),
+      /package url/i,
+    );
+    assert.equal(fetchCalled, false);
+  });
+
+  test('[M-1 RED] rejects internal IP package URL', async () => {
+    let fetchCalled = false;
+    mock.method(globalThis, 'fetch', async () => { fetchCalled = true; return { ok: true, text: async () => '' }; });
+    await assert.rejects(
+      () => fetchPackage(entry({ url: 'http://169.254.169.254/latest/meta-data/' })),
+      /package url/i,
+    );
+    assert.equal(fetchCalled, false);
+  });
+
+  test('[M-1 GREEN] accepts valid https:// package URL', async () => {
+    const code = '@create Foo';
+    const sha256 = createHash('sha256').update(code).digest('hex');
+    mock.method(globalThis, 'fetch', async () => ({ ok: true, text: async () => code }));
+    const result = await fetchPackage(entry({ url: 'https://registry.example.com/bboard.mush', sha256 }));
+    assert.equal(result, code);
+  });
 });

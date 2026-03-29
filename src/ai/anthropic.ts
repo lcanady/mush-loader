@@ -4,6 +4,7 @@
  */
 import { LoaderConfig, VetResult } from '../types';
 import { parseVetResponse } from './parse';
+import { buildVetPrompt } from './prompt';
 
 const DEFAULT_MODEL = 'claude-opus-4-6';
 
@@ -31,7 +32,7 @@ export async function vetWithAnthropic(
       messages: [
         {
           role: 'user',
-          content: vetUserMessage(code),
+          content: buildVetPrompt(code),
         },
       ],
     }),
@@ -48,19 +49,3 @@ export async function vetWithAnthropic(
   return parseVetResponse(text);
 }
 
-function vetUserMessage(code: string): string {
-  return `Please audit the following RhostMUSH softcode for security issues.
-
-\`\`\`mushcode
-${code}
-\`\`\`
-
-Respond with a JSON object in this exact format:
-{
-  "verdict": "pass" | "fail" | "warn",
-  "summary": "one-sentence summary",
-  "findings": [
-    { "severity": "error" | "warn" | "info", "line": <number or null>, "message": "description" }
-  ]
-}`;
-}

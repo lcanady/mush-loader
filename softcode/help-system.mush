@@ -241,13 +241,17 @@ think Pre-install: checking wizard access...
 # +help/list [cat] — topic listing
 # ---------------------------------------------------------------------------
 
+# TR_HELP_LIST_BARE: shared body, %0 = enactor dbref (passed from both entry points)
+&TR_HELP_LIST_BARE [v(d.help)]=
+  @pemit %0=[u(v(d.help)/FN_HEADER,Help)]%r[u(v(d.help)/FN_GROUPED_LIST,%0)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.)]
+
 &CMD_HELP_LIST_BARE [v(d.help)]=$+help/list:
-  @pemit %#=[u(v(d.help)/FN_HEADER,Help)]%r[u(v(d.help)/FN_GROUPED_LIST,%#)]%r[u(v(d.help)/FN_FOOTER,* Type '%ch+help <topic>%cn' for help on a topic.)]
+  @trigger [v(d.help)]/TR_HELP_LIST_BARE=%#
 
 &CMD_HELP_LIST_CAT [v(d.help)]=$+help/list *:
   @switch/first 1=
     [not(%0)], {
-      @trigger [v(d.help)]/CMD_HELP_LIST_BARE
+      @trigger [v(d.help)]/TR_HELP_LIST_BARE=%#
     },
     {
       @trigger [v(d.help)]/TR_HELP_LIST_CAT=%0,%#
@@ -616,8 +620,8 @@ think Pre-install: checking wizard access...
     {
       [setq(0,u(v(d.help)/FN_SAFE_TOPIC,%0))]
       [setq(1,u(v(d.help)/FN_SAFE_CAT,%1))]
-      &[strcat(HELPCAT_,ucstr(edit(%q0,%b,_)))] [v(d.help)]=%q1;
-      @pemit %2=%ch%cgCategory set:%cn %q0 → %q1
+      @break [member(get(v(d.help)/CAT__INDEX), %q1, |)]={&[strcat(HELPCAT_,ucstr(edit(%q0,%b,_)))] [v(d.help)]=%q1; @pemit %2=%ch%cgCategory set:%cn %q0 → %q1};
+      @pemit %2=Unknown category: "%q1". Use +help/addcat to create it first.
     }
 
 # ---------------------------------------------------------------------------

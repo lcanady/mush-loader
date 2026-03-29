@@ -108,7 +108,7 @@
     {
       [setq(9, u(v(d.mload)/FN_SAFE_PATH, %0))]
       [if(
-        isdbref(%q9),
+        strmatch(%q9, #-*),
         @pemit %1=Invalid path: [escape(%0)]. Only alphanumerics and / . - _ @ are allowed.,
         [setq(0, u(v(d.mload)/FN_EXEC, vet, %q9))]
         @set [v(d.mload)]=MLOAD_PENDING:1;
@@ -197,7 +197,7 @@
     {
       [setq(9, u(v(d.mload)/FN_SAFE_PKG, %0))]
       [if(
-        isdbref(%q9),
+        strmatch(%q9, #-*),
         @pemit %1=Invalid package name: [escape(%0)]. Only alphanumerics and @ . - _ are allowed.,
         [setq(0, u(v(d.mload)/FN_EXEC, install, %q9))]
         @pemit %1=[escape(%q0)];
@@ -217,7 +217,7 @@
       @pemit %#=No operations logged yet.
     },
     {
-      @pemit %#=Last operation: [last(iter(get(v(d.mload)/MLOAD_LOG), %i0, |))]
+      @pemit %#=Last operation: [last(get(v(d.mload)/MLOAD_LOG), |)]
     }
 
 # ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@
     {
       [setq(9, u(v(d.mload)/FN_SAFE_PATH, %0))]
       [if(
-        isdbref(%q9),
+        strmatch(%q9, #-*),
         @pemit %1=Invalid path: [escape(%0)]. Only alphanumerics and / . - _ @ are allowed.,
         @pemit %1=[escape(u(v(d.mload)/FN_EXEC, load, %q9))];
         @trigger [v(d.mload)]/TR_LOG=Loaded [escape(%q9)] by [name(%1)]

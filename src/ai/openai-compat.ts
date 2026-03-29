@@ -5,6 +5,7 @@
  */
 import { LoaderConfig, VetResult } from '../types';
 import { parseVetResponse } from './parse';
+import { buildVetPrompt } from './prompt';
 
 const DEFAULT_URLS: Record<string, string> = {
   openai: 'https://api.openai.com',
@@ -44,7 +45,7 @@ export async function vetWithOpenAICompat(
       model,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: vetUserMessage(code) },
+        { role: 'user', content: buildVetPrompt(code) },
       ],
       response_format: { type: 'json_object' },
     }),
@@ -63,19 +64,3 @@ export async function vetWithOpenAICompat(
   return parseVetResponse(text);
 }
 
-function vetUserMessage(code: string): string {
-  return `Audit this RhostMUSH softcode for security issues. Return JSON only.
-
-\`\`\`mushcode
-${code}
-\`\`\`
-
-Format:
-{
-  "verdict": "pass" | "fail" | "warn",
-  "summary": "one-sentence summary",
-  "findings": [
-    { "severity": "error" | "warn" | "info", "line": <number or null>, "message": "description" }
-  ]
-}`;
-}

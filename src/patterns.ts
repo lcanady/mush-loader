@@ -36,6 +36,11 @@ function slug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+/** Sanitize a YAML tag: keep only alphanumerics, hyphens, and underscores. */
+function sanitizeTag(tag: string): string {
+  return tag.replace(/[^a-z0-9\-_]/gi, '').slice(0, 64);
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -76,7 +81,7 @@ domain: ${domain}
 server: RhostMUSH
 source: mush-loader vet
 complexity: medium
-tags: [${tags.join(', ')}]
+tags: [${tags.map(sanitizeTag).filter(Boolean).join(', ')}]
 date_added: "${today()}"
 tested: false
 ---

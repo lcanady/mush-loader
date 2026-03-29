@@ -10,13 +10,15 @@
  *   mush-loader info <pkg[@version]>
  *   mush-loader install <pkg[@version]>
  *   mush-loader update <pkg[@version]>
+ *   mush-loader init <name>
  *   mush-loader status
+ *   mush-loader history [--limit <n>] [--host <host>] [--json]
  *   mush-loader bootstrap
  *
  * All config via env vars or loader.conf (sourced before running).
  * See config/loader.conf.example for all options.
  */
-import { readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { basename } from 'path';
 import { loadConfig } from './config';
@@ -32,7 +34,7 @@ import {
   formatRegistryListing,
   resolvePackage,
 } from './registry';
-import { appendHistory, findLastInstall } from './history';
+import { appendHistory, findLastInstall, recentHistory } from './history';
 import { VetResult } from './types';
 import { withClient } from './client';
 import { apiAvailable, apiGet } from './api';
@@ -376,6 +378,169 @@ async function cmdUpdate(args: string[]): Promise<void> {
   }
 }
 
+/** Convert 'my-system' → 'My System' for use as a MUSH object name. */
+function toObjectName(slug: string): string {
+  return slug
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function mushTemplate(slug: string, objName: string): string {
+  return `# ${slug} v1.0
+# Description: TODO
+#
+# Object: ${objName} <sys>
+# Install: mush-loader load ${slug}.mush
+
+#!pre-install
+# Runs first: dependency checks, environment prep.
+think Pre-install: checking requirements...
+#!end-pre-install
+
+# ---------------------------------------------------------------------------
+# Main install
+# ---------------------------------------------------------------------------
+@create ${objName} <sys>
+@set ${objName} <sys>=inherit safe
+@fo me=&d.sys me=search(name=${objName} <sys>)
+
+# TODO: Add your attributes and commands here.
+# Reference the system object via v(d.sys).
+&VERSION [v(d.sys)]=1.0.0
+
+#!post-install
+# Runs after main: wiring, version stamp, announcement.
+think Post-install: ${objName} installed at [v(d.sys)].
+#!end-post-install
+`;
+}
+
+function testTemplate(slug: string, objName: string): string {
+  return `/**
+ * ${slug}.test.ts
+ *
+ * Tests for ${objName}.
+ * RED until softcode/${slug}.mush has been loaded onto the game.
+ */
+import { RhostRunner } from '@rhost/testkit';
+
+const PASS = process.env.RHOST_PASS;
+if (!PASS) {
+  console.error('RHOST_PASS env var is required');
+  process.exit(1);
+}
+
+const HOST = process.env.RHOST_HOST ?? 'localhost';
+const PORT = parseInt(process.env.RHOST_PORT ?? '4201', 10);
+const USER = process.env.RHOST_USER ?? 'Wizard';
+
+const runner = new RhostRunner();
+
+runner.describe('${slug}', ({ it, beforeAll }) => {
+  let sysDbref: string;
+
+  beforeAll(async ({ client }) => {
+    sysDbref = await client.eval('search(name=${objName} <sys>)');
+  });
+
+  it('system object exists', async ({ expect }) => {
+    await expect('search(name=${objName} <sys>)').toBeDbref();
+  });
+
+  it('system object is inherit safe', async ({ expect }) => {
+    await expect(\`hasflag(\${sysDbref},inherit)\`).toBe('1');
+    await expect(\`hasflag(\${sysDbref},safe)\`).toBe('1');
+  });
+
+  it('has VERSION attribute', async ({ expect }) => {
+    await expect(\`get(\${sysDbref}/VERSION)\`).toBeTruthy();
+  });
+
+  // TODO: Add tests for your commands and functions.
+});
+
+runner
+  .run({ host: HOST, port: PORT, username: USER, password: PASS })
+  .then(r => process.exit(r.failed > 0 ? 1 : 0))
+  .catch(err => { console.error(err.message); process.exit(1); });
+`;
+}
+
+async function cmdInit(args: string[]): Promise<void> {
+  const slug = args.filter(a => !a.startsWith('-'))[0];
+  if (!slug) {
+    console.error('Usage: mush-loader init <name>');
+    process.exit(1);
+  }
+
+  if (!/^[a-z0-9][a-z0-9-_]*$/i.test(slug)) {
+    console.error(`Invalid name "${slug}". Use letters, numbers, hyphens, and underscores only.`);
+    process.exit(1);
+  }
+
+  const objName   = toObjectName(slug);
+  const mushFile  = resolve(`${slug}.mush`);
+  const testsDir  = resolve('tests');
+  const testFile  = join(testsDir, `${slug}.test.ts`);
+
+  const conflicts: string[] = [];
+  if (existsSync(mushFile)) conflicts.push(mushFile);
+  if (existsSync(testFile)) conflicts.push(testFile);
+
+  if (conflicts.length > 0) {
+    console.error(`${RED}Files already exist — aborting to avoid overwrite:${RESET}`);
+    for (const f of conflicts) console.error(`  ${f}`);
+    process.exit(1);
+  }
+
+  if (!existsSync(testsDir)) mkdirSync(testsDir, { recursive: true });
+
+  writeFileSync(mushFile, mushTemplate(slug, objName), 'utf-8');
+  writeFileSync(testFile, testTemplate(slug, objName), 'utf-8');
+
+  console.log(`\n${GREEN}Scaffolded ${objName}:${RESET}\n`);
+  console.log(`  ${BOLD}${mushFile}${RESET}   — edit this to add your softcode`);
+  console.log(`  ${BOLD}${testFile}${RESET}   — edit this to add your tests`);
+  console.log(`\n${DIM}Next steps:${RESET}`);
+  console.log(`  mush-loader load --dry-run ${slug}.mush   # preview`);
+  console.log(`  mush-loader load ${slug}.mush             # install`);
+  console.log(`  tsx tests/${slug}.test.ts                 # run tests`);
+  console.log();
+}
+
+async function cmdHistory(args: string[]): Promise<void> {
+  const limitIdx = args.indexOf('--limit');
+  const limit    = limitIdx >= 0 ? (parseInt(args[limitIdx + 1], 10) || 20) : 20;
+  const hostIdx  = args.indexOf('--host');
+  const host     = hostIdx >= 0 ? args[hostIdx + 1] : undefined;
+  const jsonFlag = args.includes('--json');
+
+  const entries = recentHistory(limit, host);
+
+  if (entries.length === 0) {
+    console.log(host ? `No history found for host: ${host}` : 'No install history found.');
+    return;
+  }
+
+  if (jsonFlag) {
+    console.log(JSON.stringify(entries, null, 2));
+    return;
+  }
+
+  const label = host ? ` (${host})` : '';
+  console.log(`\n${BOLD}Install history${label}:${RESET}\n`);
+  for (const e of entries) {
+    const ts     = e.timestamp.replace('T', ' ').slice(0, 19);
+    const src    = e.source === 'registry' ? `${CYAN}registry${RESET}` : `${DIM}file    ${RESET}`;
+    const pkg    = e.version ? `${e.name}@${e.version}` : e.name;
+    const game   = `${DIM}${e.host}:${e.port}${RESET}`;
+    const status = e.success ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+    const obj    = e.object ? `  ${DIM}${e.object}${RESET}` : '';
+    console.log(`  ${DIM}${ts}${RESET}  ${src}  ${pkg}  ${game}  ${status}${obj}`);
+  }
+  console.log();
+}
+
 async function cmdStatus(): Promise<void> {
   const config = loadConfig();
   console.log(`${BOLD}Game: ${config.host}:${config.port}${RESET}\n`);
@@ -514,6 +679,8 @@ ${BOLD}Commands:${RESET}
   info <pkg[@version]>                   Show details for a registry package
   install <pkg[@version]>                Fetch + install from registry
   update <pkg[@version]>                 Diff + re-install a registry package
+  init <name>                            Scaffold a new .mush file + test stub
+  history [--limit <n>] [--host <h>]    Show local install history (default: last 20)
   status                                 Check connectivity to the game server
   bootstrap                              Install the in-game +mload command object
 
@@ -544,6 +711,11 @@ ${BOLD}Examples:${RESET}
   mush-loader info bboard
   mush-loader install bboard
   mush-loader update bboard
+  mush-loader history
+  mush-loader history --limit 5
+  mush-loader history --host game.example.com
+  mush-loader history --json
+  mush-loader init my-system
 `);
 }
 
@@ -558,6 +730,8 @@ async function main(): Promise<void> {
     case 'info':      return cmdInfo(args);
     case 'install':   return cmdInstall(args);
     case 'update':    return cmdUpdate(args);
+    case 'init':      return cmdInit(args);
+    case 'history':   return cmdHistory(args);
     case 'status':    return cmdStatus();
     case 'bootstrap': return cmdBootstrap();
     case '--help':

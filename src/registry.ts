@@ -29,7 +29,39 @@ export async function fetchIndex(config: LoaderConfig): Promise<RegistryEntry[]>
   return data.packages ?? [];
 }
 
+const SSRF_BLOCKED_PREFIXES = [
+  /^169\.254\./,  // AWS metadata / link-local
+  /^10\./,        // RFC-1918 private
+  /^172\.(1[6-9]|2\d|3[01])\./,  // RFC-1918 private
+  /^192\.168\./,  // RFC-1918 private
+  /^127\./,       // loopback
+  /^::1$/,        // IPv6 loopback
+  /^fc00:/i,      // IPv6 ULA
+];
+
+function validatePackageUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid package URL: ${url}`);
+  }
+  if (!ALLOWED_SCHEMES.includes(parsed.protocol)) {
+    throw new Error(
+      `Package URL scheme must be http or https, got: ${parsed.protocol} — ` +
+      `possible SSRF attempt blocked (${url})`
+    );
+  }
+  const hostname = parsed.hostname;
+  for (const pat of SSRF_BLOCKED_PREFIXES) {
+    if (pat.test(hostname)) {
+      throw new Error(`Package URL targets a private/internal address — SSRF blocked (${url})`);
+    }
+  }
+}
+
 export async function fetchPackage(entry: RegistryEntry): Promise<string> {
+  validatePackageUrl(entry.url);
   const response = await fetch(entry.url);
   if (!response.ok) {
     throw new Error(`Package download failed: ${response.status} ${entry.url}`);

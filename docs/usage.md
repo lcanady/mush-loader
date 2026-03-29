@@ -82,6 +82,22 @@ code is identical to what you already have, it tells you so and exits.
 
 ---
 
+### Scaffolding a new package
+
+```bash
+mush-loader init my-system
+```
+
+Creates two files in the current directory:
+
+- `my-system.mush` — softcode template with pre-install / main / post-install sections
+- `tests/my-system.test.ts` — test stub wired to `@rhost/testkit`
+
+The object name is derived from the slug (`my-system` → `My System <sys>`). Edit both files,
+then run `mush-loader load --dry-run my-system.mush` to preview before installing.
+
+---
+
 ### Bootstrapping
 
 ```bash
@@ -94,6 +110,21 @@ mush-loader bootstrap
 ## Install history
 
 Every successful `load` and `install` is recorded in `~/.mush-loader/history.json`.
+
+```bash
+# Show the last 20 installs (all hosts)
+mush-loader history
+
+# Limit to 5 entries
+mush-loader history --limit 5
+
+# Filter by game host
+mush-loader history --host game.example.com
+
+# Raw JSON (useful for scripting)
+mush-loader history --json
+```
+
 Each entry stores the timestamp, game host, package name/version, and the raw
 code that was installed. `mush-loader update` reads from this history to produce
 the diff.

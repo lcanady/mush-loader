@@ -313,21 +313,23 @@ think Pre-install: checking wizard access for RockJobs install...
 @set Rockpath's Job Database=safe
 
 @@ M2: @lock/use on Job Database (INHERIT object must be wizard-only)
-@lock/use Rockpath's Job Database=haspower(me,Wizard)
+@@ Fix: me = locked object in lock expressions, not enactor; use %# instead.
+@lock/use Rockpath's Job Database=hasflag(%#,wizard)
 
 @@ INHERIT removal — Jobs System carries player-accessible $-commands (+request/*)
 @@ Removing INHERIT means injection runs at player privilege, not wizard.
 @@ Job Database retains INHERIT (fn`create-job, mailsend need wizard power).
 @set Rockpath's Jobs System=!inherit
 
-@@ H1: isnum() pre-guard on CMD`VIEW-REQ
-&CMD`VIEW-REQ Rockpath's Jobs System=$+request *:@break [isnum(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%q0/requester)])]={@eval [u([v(database)]/fn`showjob, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, Req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Invalid Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request must be a number.
+@@ H1: isint() pre-guard on CMD`VIEW-REQ (isnum accepts decimals; request IDs must be integers)
+&CMD`VIEW-REQ Rockpath's Jobs System=$+request *:@break [isint(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%q0/requester)])]={@eval [u([v(database)]/fn`showjob, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, Req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Invalid Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request must be a number.
 
-@@ H1: isnum() pre-guard on CMD`CANCEL
-&CMD`CANCEL Rockpath's Jobs System=$+request/cancel *:@break [isnum(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch([get(%q0/requester)], %#)]={@eval [u([v(database)]/fn`cancel-request, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, req)] Please choose one of your own requests.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Please choose a valid +Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request number must be a number.
+@@ H1: isint() pre-guard on CMD`CANCEL (isnum accepts decimals; request IDs must be integers)
+&CMD`CANCEL Rockpath's Jobs System=$+request/cancel *:@break [isint(%0)]={@skip/ifelse [t([setr(0, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch([get(%q0/requester)], %#)]={@eval [u([v(database)]/fn`cancel-request, %q0)]}; @pemit %#=[u([v(database)]/fn`prompt, req)] Please choose one of your own requests.}, @pemit %#=[u([v(database)]/fn`prompt, Req)] Please choose a valid +Request.}; @pemit %#=[u([v(database)]/fn`prompt, Req)] Request number must be a number.
 
-@@ C1: CMD`REQ-ADD — bracket-rejection on topic (%1) and body (%2)
-&CMD`REQ-ADD Rockpath's Jobs System=$+request/create */*=*:@break [t([match([get([v(database)]/list`categories)], %0)])]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the topic.}; @break [strmatch(%2, [edit(%2, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the body.}; @eval [u([v(database)]/fn`create-job, %0, %1, %2)];@pemit %#=[u([v(database)]/fn`prompt, req)] You have created a new Request under the [ansi(y, [ucstr(%0)])] category.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].
+@@ C1: CMD`REQ-ADD — bracket-rejection on category (%0), topic (%1), and body (%2)
+@@ Fix: %0 (category) was missing bracket guard; add it before match() call to prevent evaluated injection.
+&CMD`REQ-ADD Rockpath's Jobs System=$+request/create */*=*:@break [strmatch(%0, [edit(%0, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Category names may not contain [ characters.}; @break [t([match([get([v(database)]/list`categories)], %0)])]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the topic.}; @break [strmatch(%2, [edit(%2, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Requests may not contain [ characters in the body.}; @eval [u([v(database)]/fn`create-job, %0, %1, %2)];@pemit %#=[u([v(database)]/fn`prompt, req)] You have created a new Request under the [ansi(y, [ucstr(%0)])] category.}; @pemit %#=[u([v(database)]/fn`prompt, jobs)] Invalid Category. Please choose from [elist([get([v(database)]/list`categories)], or)].
 
 @@ C2: CMD`REQ-COMMENT — bracket-rejection on comment body (%1)
 &CMD`REQ-COMMENT Rockpath's Jobs System=$+request/comment *=*:@skip/ifelse [isint(%0)]={@break [strmatch(%1, [edit(%1, [, %[, ], %])])]={@pemit %#=[u([v(database)]/fn`prompt, req)] Comments may not contain [ characters.}; @skip/ifelse [t([setr(j, [u([v(database)]/fn`get-job, %0)])])]={@break [strmatch(%#, [get(%qj/requester)])]={@eval [set(%qj, desc:[strcat([get(%qj/desc)], %r%r[name(%#)] %[[timefmt($M/$D/$Y $H:$02T$p, [secs()])]%]: %1)])];@pemit %#=[u([v(database)]/fn`prompt, req)] You have commented on [edit([name(%qj)], Job, Request)].};@pemit %#=[u([v(database)]/fn`prompt, req)] That request isn't yours.}, @pemit %#=[u([v(database)]/fn`prompt, req)] No such request.}, @pemit %#=[u([v(database)]/fn`prompt, req)] Request must be a number.
